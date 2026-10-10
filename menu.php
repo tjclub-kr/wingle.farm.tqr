@@ -18,6 +18,7 @@ window.TODO_ATTACHMENT_EXTENSIONS = ['jpg','jpeg','png','gif','webp','pdf','txt'
         <span class="header-title inactive" id="title-daily" onclick="handleTitleClick('dailytasks.php', '오늘의 할일')">오늘의 할일</span>
         <span class="header-title active" id="title-farm" onclick="handleTitleClick('farmmng.php', '밭 관리')">밭 관리</span>
         <span class="header-title inactive" id="title-memo" onclick="handleTitleClick('memo.php', '메모장')">메모장</span>
+        <span class="header-title inactive" id="title-shipping" onclick="handleTitleClick('outbound.php', '출고 관리')">출고</span>
     </div>
 
     <!-- 오른쪽 아이콘 묶음 영역 -->
@@ -47,6 +48,7 @@ window.TODO_ATTACHMENT_EXTENSIONS = ['jpg','jpeg','png','gif','webp','pdf','txt'
             <li><a href="#" onclick="loadPage('dailytasks.php', '오늘의 할일'); return false;">오늘의 할일</a></li>
             <li><a href="#" onclick="loadPage('farmmng.php', '밭 관리'); return false;">밭 관리</a></li>
             <li><a href="#" onclick="loadPage('memo.php', '메모장'); return false;">메모장</a></li>
+            <li><a href="#" onclick="loadPage('outbound.php', '출고 관리'); return false;">출고</a></li>
             <li><a href="#" onclick="loadPage('calendar.php', '달력'); return false;">달력</a></li>
             <li><a href="#" onclick="loadPage('farmSet.php', '밭 설정'); return false;">밭 설정</a></li>
             <!-- li><a href="#" onclick="loadPage('dataClear.php', '데이터클리어'); return false;">데이터클리어</a></li -->
@@ -135,10 +137,12 @@ window.TODO_ATTACHMENT_EXTENSIONS = ['jpg','jpeg','png','gif','webp','pdf','txt'
 		const titleDaily = document.getElementById('title-daily');
 		const titleFarm = document.getElementById('title-farm');
 		const titleMemo = document.getElementById('title-memo');
+		const titleShipping = document.getElementById('title-shipping');
 
 		if (titleDaily) titleDaily.className = 'header-title inactive';
 		if (titleFarm) titleFarm.className = 'header-title inactive';
 		if (titleMemo) titleMemo.className = 'header-title inactive';
+		if (titleShipping) titleShipping.className = 'header-title inactive';
 
 		if (pageUrl.includes('dailytasks.php') && titleDaily) {
 			titleDaily.className = 'header-title active';
@@ -146,6 +150,8 @@ window.TODO_ATTACHMENT_EXTENSIONS = ['jpg','jpeg','png','gif','webp','pdf','txt'
 			titleFarm.className = 'header-title active';
 		} else if (pageUrl.includes('memo.php') && titleMemo) {
 			titleMemo.className = 'header-title active';
+		} else if (pageUrl.includes('outbound.php') && titleShipping) {
+			titleShipping.className = 'header-title active';
 		}
 	}
 
