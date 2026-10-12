@@ -9,26 +9,88 @@ declare(strict_types=1);
  * -------------------------------------------------- */
 require_once __DIR__ . '/db_connect.php';
 
-// 데이터 조회 (farms 테이블과 JOIN하여 farm_name 가져오기)
-try {
-    $stmt = $pdo->query("
-        SELECT o.*, f.farm_name 
-        FROM outbound o 
-        JOIN farms f ON o.farm_id = f.farm_id 
-        ORDER BY o.outbound_date DESC, f.farm_name ASC, o.product_type ASC
-    ");
-    $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
-} catch (PDOException $e) {$rows = [];
+// 년월 검색 파라미터 설정 (기본값: 현재 년월)[cite: 19]
+$search_ym = isset($_GET['search_ym']) && $_GET['search_ym'] !== ''
+    ? $_GET['search_ym']
+    : date('Y-m');
+
+// YYYY-MM 형식 검증[cite: 19]
+if (!preg_match('/^\d{4}-(0[1-9]|1[0-2])$/', $search_ym)) {
+    $search_ym = date('Y-m');
 }
 
-// 날짜별, 밭별 데이터 구조화 및 소계/총계 계산
+$ymParts = explode('-', $search_ym);
+$search_year = (int)($ymParts[0] ?? date('Y'));
+$search_month = (int)($ymParts[1] ?? date('m'));
+
+$start_date = sprintf('%04d-%02d-01', $search_year, $search_month);
+$startDateObj = new DateTimeImmutable($start_date);
+$end_date = $startDateObj->modify('+1 month')->format('Y-m-d');
+
+$rows = [];
+$queryError = '';
+
+/*
+ * 상세 행만 조회합니다.
+ * 밭별 소계와 날짜별 합계는 아래 PHP 출력부에서 상세 행 전체를 기준으로 계산합니다.
+ * SQL에서 집계 행까지 함께 가져오면 PHP에서 소계/합계를 다시 계산하여 중복되므로,
+ * 이 화면에서는 상세 데이터만 조회합니다.[cite: 19]
+ */
+try {
+    $sql = "
+        SELECT
+            o.id,
+            o.farm_id,
+            o.outbound_date,
+            o.product_type,
+            o.quantity,
+            o.disposal,
+            o.auction_unit_price,
+            o.auction_total_amount,
+            o.deposit_amount,
+            o.deposit_unit_price,
+            CAST(
+                ROUND(
+                    (o.auction_total_amount - o.deposit_amount)
+                    / NULLIF(o.auction_total_amount, 0) * 100,
+                    2
+                ) AS DECIMAL(10, 2)
+            ) AS commission_rate,
+            o.remarks,
+            o.is_closed,
+            f.farm_name
+        FROM outbound o
+        INNER JOIN farms f
+            ON o.farm_id = f.farm_id
+        WHERE o.outbound_date >= :start_date
+          AND o.outbound_date < :end_date
+        ORDER BY
+            o.outbound_date DESC,
+            f.farm_name ASC,
+            o.product_type ASC,
+            o.id ASC
+    ";
+
+    $stmt = $pdo->prepare($sql);
+    $stmt->bindValue(':start_date', $start_date, PDO::PARAM_STR);
+    $stmt->bindValue(':end_date', $end_date, PDO::PARAM_STR);
+    $stmt->execute();
+    $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+} catch (PDOException $e) {
+    $rows = [];
+    $queryError =$e->getMessage();
+}
+
+// 날짜별, 밭별 데이터 구조화[cite: 19]
 $groupedData = [];
 foreach ($rows as$row) {
-    $date =$row['outbound_date'];
-    $field =$row['farm_name']; // farms 테이블에서 조인해온 밭 이름 사용
+    $date = (string)$row['outbound_date'];
+    $field = (string)$row['farm_name'];
     $groupedData[$date][$field][] =$row;
 }
+
 ?>
+
 <style>
     .shipping-wrap {
         padding: 5px;
@@ -37,10 +99,27 @@ foreach ($rows as$row) {
     }
     .shipping-header-area {
         display: grid;
-        grid-template-columns: 1fr auto 1fr;
+        grid-template-columns: auto 1fr auto;
         align-items: center;
         margin-bottom: 10px;
         width: 100%;
+    }
+    .shipping-ym-form {
+        grid-column: 1;
+        justify-self: start;
+        display: flex;
+        align-items: center;
+    }
+    .shipping-ym-input {
+        height: 30px;
+        padding: 4px 8px;
+        border: 1px solid #ddd;
+        border-radius: 4px;
+        font-size: 12px;
+        font-family: inherit;
+        background-color: #fff;
+        color: #333;
+        cursor: pointer;
     }
     .shipping-title {
         grid-column: 2;
@@ -106,6 +185,7 @@ foreach ($rows as$row) {
         padding: 3px 2px;
         border: 1px solid #e0e0e0;
         background-color: #fff;
+        cursor: pointer;
     }
     .shipping-table tr.group-divider td {
         border-bottom: 1px solid #e0e0e0;
@@ -119,10 +199,12 @@ foreach ($rows as$row) {
     .farm-subtotal-row td {
         background-color: #fffde7 !important;
         font-weight: bold;
+        cursor: default !important;
     }
     .date-total-row td {
         background-color: #ede7f6 !important;
         font-weight: bold;
+        cursor: default !important;
     }
 
     .custom-row td {
@@ -257,7 +339,13 @@ foreach ($rows as$row) {
 
 <div class="shipping-wrap">
     <div class="shipping-header-area">
+        <!-- 년월 통합 선택 컴포넌트 (왼쪽 정렬)[cite: 19] -->
+        <form method="GET" action="outbound.php" class="shipping-ym-form">
+            <input type="month" name="search_ym" class="shipping-ym-input" value="<?= htmlspecialchars($search_ym) ?>" onchange="this.form.requestSubmit()">
+        </form>
+
         <h2 class="shipping-title">📦 출고 관리</h2>
+        
         <div class="header-btn-group">
             <button type="button" class="header-save-btn" id="headerSaveBtn" onclick="saveNewRowAction()">저장</button>
             <button type="button" class="add-row-btn" onclick="openNewShippingModal()" title="한 줄 추가">+</button>
@@ -277,12 +365,16 @@ foreach ($rows as$row) {
                     <th>경매<BR>총액</th>
                     <th>입금액</th>
                     <th>입금<BR>단가</th>
-                    <th>수수료</th>
+                    <th>수수료<BR>(%)</th>
                 </tr>
             </thead>
             <tbody>
                 <?php 
-                if (empty($groupedData)) {
+                if ($queryError !== '') {
+                    echo '<tr><td colspan="10" style="padding:20px; text-align:center; color:#c62828;">출고 데이터 조회 오류: '
+                        . htmlspecialchars($queryError, ENT_QUOTES, 'UTF-8')
+                        . '</td></tr>';
+                } elseif (empty($groupedData)) {
                     echo '<tr><td colspan="10" style="padding:20px; text-align:center; color:#888;">등록된 출고 데이터가 없어.</td></tr>';
                 } else {
                     foreach ($groupedData as$date => $fields) {$dateRowSpan = 0;
@@ -291,7 +383,7 @@ foreach ($rows as$row) {
                         $dateTotalAuctionAmount = 0;
                         $dateTotalDepositAmount = 0;
                         
-                        foreach ($fields as$field => $items) {$dateRowSpan += count($items) + 1;
+                        foreach ($fields as$field => $items) {$dateRowSpan += count($items) + 1;                        
                         }$dateRowSpan += 1;
 
                         $dateFormatted = date('m', strtotime($date)) . '<BR>/<BR>' . date('d', strtotime($date));$isFirstDateRow = true;
@@ -315,7 +407,7 @@ foreach ($rows as$row) {
                                 $dateTotalAuctionAmount += (float)$item['auction_total_amount'];
                                 $dateTotalDepositAmount += (float)$item['deposit_amount'];
                 ?>
-                <tr data-date="<?= htmlspecialchars($date) ?>" data-farm="<?= htmlspecialchars($field) ?>" data-product="<?= htmlspecialchars($item['product_type']) ?>" data-disposal="<?= htmlspecialchars($item['disposal']) ?>" data-is-new="false" data-auction-unit="<?= htmlspecialchars($item['auction_unit_price']) ?>" data-auction-total="<?= htmlspecialchars($item['auction_total_amount']) ?>" data-deposit-amount="<?= htmlspecialchars($item['deposit_amount']) ?>" data-qty="<?= htmlspecialchars($item['quantity']) ?>" data-auction-modified="false" data-qty-modified="false">
+                <tr data-date="<?= htmlspecialchars($date) ?>" data-farm="<?= htmlspecialchars($field) ?>" data-product="<?= htmlspecialchars($item['product_type']) ?>" data-disposal="<?= htmlspecialchars($item['disposal']) ?>" data-is-new="false" data-auction-unit="<?= htmlspecialchars((string)$item['auction_unit_price']) ?>" data-auction-total="<?= htmlspecialchars((string)$item['auction_total_amount']) ?>" data-deposit-amount="<?= htmlspecialchars((string)$item['deposit_amount']) ?>" data-qty="<?= htmlspecialchars((string)$item['quantity']) ?>" data-auction-modified="false" data-qty-modified="false">
                     <?php if ($isFirstDateRow) { ?>
                         <td rowspan="<?= $dateRowSpan ?>" style="vertical-align: middle; background-color: #fafafa; border-bottom: 1px solid #e0e0e0;" data-col="date"><?= $dateFormatted ?></td>
                         <?php $isFirstDateRow = false; ?>
@@ -333,28 +425,28 @@ foreach ($rows as$row) {
                     <td class="text-right" data-col="auction-total"><?= number_format((float)$item['auction_total_amount']) ?></td>
                     <td class="text-right" data-col="deposit-amount"><?= number_format((float)$item['deposit_amount']) ?></td>
                     <td class="text-right" data-col="deposit-unit"><?= number_format((float)$item['deposit_unit_price']) ?></td>
-                    <td class="text-center" data-col="fee"><?= htmlspecialchars(rtrim(rtrim(number_format((float)$item['commission_rate'], 2), '0'), '.')) ?>%</td>
+                    <td class="text-center" data-col="fee"><?= htmlspecialchars(rtrim(rtrim(number_format((float)$item['commission_rate'], 2), '0'), '.')) ?></td>
                 </tr>
                 <?php
                             } // end foreach items
                             
-                            $fieldAvgFee = count($items) > 0 ? array_sum(array_column($items, 'commission_rate')) / count($items) : 0;
+                            $fieldFee = $fieldTotalAuctionAmount != 0 ? (($fieldTotalAuctionAmount - $fieldTotalDepositAmount) /$fieldTotalAuctionAmount * 100) : null;
                 ?>
                 <!-- 밭별 소계 -->
                 <tr class="farm-subtotal-row group-divider" data-date="<?= htmlspecialchars($date) ?>" data-farm="<?= htmlspecialchars($field) ?>">
                     <td data-col="product">소계</td>
                     <td class="text-right" data-col="qty"><?= rtrim(rtrim(number_format($fieldTotalQty, 2), '0'), '.') ?></td>
                     <td class="text-right" data-col="disposal"><?= rtrim(rtrim(number_format($fieldTotalDisposal, 2), '0'), '.') ?></td>
-                    <td class="text-right" data-col="auction-unit">-</td>
+                    <td class="text-right" data-col="auction-unit"> </td>
                     <td class="text-right" data-col="auction-total"><?= number_format($fieldTotalAuctionAmount) ?></td>
                     <td class="text-right" data-col="deposit-amount"><?= number_format($fieldTotalDepositAmount) ?></td>
-                    <td class="text-right" data-col="deposit-unit">-</td>
-                    <td class="text-center" data-col="fee"><?= round($fieldAvgFee) ?>%</td>
+                    <td class="text-right" data-col="deposit-unit"> </td>
+                    <td class="text-center" data-col="fee"><?= $fieldFee !== null ? number_format($fieldFee, 2) : '-' ?></td>
                 </tr>
                 <?php
                         } // end foreach fields
 
-                        $dateAvgFee = count($rows) > 0 ? array_sum(array_column($rows, 'commission_rate')) / count($rows) : 0;
+                        $dateFee = $dateTotalAuctionAmount != 0 ? (($dateTotalAuctionAmount - $dateTotalDepositAmount) /$dateTotalAuctionAmount * 100) : null;
                 ?>
                 <!-- 날짜별 합계 -->
                 <tr class="date-total-row section-divider" data-date="<?= htmlspecialchars($date) ?>">
@@ -362,11 +454,11 @@ foreach ($rows as$row) {
                     <td>-</td>
                     <td class="text-right"><?= rtrim(rtrim(number_format($dateTotalQty, 2), '0'), '.') ?></td>
                     <td class="text-right"><?= rtrim(rtrim(number_format($dateTotalDisposal, 2), '0'), '.') ?></td>
-                    <td class="text-right">-</td>
+                    <td class="text-right"> </td>
                     <td class="text-right"><?= number_format($dateTotalAuctionAmount) ?></td>
                     <td class="text-right"><?= number_format($dateTotalDepositAmount) ?></td>
-                    <td class="text-right">-</td>
-                    <td class="text-center"><?= round($dateAvgFee) ?>%</td>
+                    <td class="text-right"> </td>
+                    <td class="text-center"><?= $dateFee !== null ? number_format($dateFee, 2) : '-' ?></td>
                 </tr>
                 <?php
                     } // end foreach groupedData
@@ -377,11 +469,10 @@ foreach ($rows as$row) {
     </div>
 </div>
 
-<!-- 출고 정보 입력 메인 팝업 모달 (신규 추가 및 수정 겸용) -->
+<!-- 팝업 모달 HTML 구성 -->
 <div class="shipping-modal-overlay" id="shippingModal">
     <div class="shipping-modal-content">
         <h3 id="shippingModalTitle">출고 정보 입력</h3>
-        
         <div class="shipping-top-row" id="shippingTopRowContainer">
             <div class="shipping-form-group" style="margin-bottom:0;">
                 <label for="shipping-date">날짜</label>
@@ -404,10 +495,7 @@ foreach ($rows as$row) {
                 </div>
             </div>
         </div>
-
-        <div id="dynamicProductList">
-        </div>
-
+        <div id="dynamicProductList"></div>
         <div class="shipping-modal-actions">
             <button type="button" class="btn-cancel" onclick="closeShippingModal()">닫기</button>
             <button type="button" class="btn-save" onclick="saveShippingRow()">확인</button>
@@ -415,7 +503,6 @@ foreach ($rows as$row) {
     </div>
 </div>
 
-<!-- 경매 단가 / 경매 총액 입력 팝업 모달 -->
 <div class="shipping-modal-overlay" id="auctionModal">
     <div class="shipping-modal-content">
         <h3>경매 정보 입력</h3>
@@ -434,7 +521,6 @@ foreach ($rows as$row) {
     </div>
 </div>
 
-<!-- 입금액 입력 팝업 모달 -->
 <div class="shipping-modal-overlay" id="depositModal">
     <div class="shipping-modal-content">
         <h3>입금액 입력</h3>
@@ -450,7 +536,10 @@ foreach ($rows as$row) {
 </div>
 
 <script>
-let currentEditingRow = null;
+window.currentEditingRow = window.currentEditingRow || null;
+if (typeof currentEditingRow === 'undefined') {
+    var currentEditingRow = null;
+}
 
 function formatNum(val) {
     if (val === '-' || val === '' || isNaN(val)) return '-';
@@ -658,7 +747,6 @@ function saveShippingRow() {
                 <td class="text-center"><button type="button" class="delete-btn">-</button></td>
             `;
 
-            setupRowEvents(newRow);
             tableBody.insertBefore(newRow, tableBody.firstChild);
         });
 
@@ -667,62 +755,15 @@ function saveShippingRow() {
     }
 }
 
-function setupRowEvents(row) {
-    const editCells = row.querySelectorAll('[data-col="date"], [data-col="farm"], [data-col="product"], [data-col="qty"], [data-col="disposal"]');
-    editCells.forEach(cell => {
-        cell.onclick = (e) => {
-            e.stopPropagation();
-            checkAndOpenEdit(row);
-        };
-    });
-
-    const auctionCells = row.querySelectorAll('[data-col="auction-unit"], [data-col="auction-total"]');
-    auctionCells.forEach(cell => {
-        cell.onclick = (e) => {
-            e.stopPropagation();
-            checkAndOpenAuction(row);
-        };
-    });
-
-    const depositCells = row.querySelectorAll('[data-col="deposit-amount"], [data-col="deposit-unit"]');
-    depositCells.forEach(cell => {
-        cell.onclick = (e) => {
-            e.stopPropagation();
-            checkAndOpenDeposit(row);
-        };
-    });
-
-    const deleteBtn = row.querySelector('.delete-btn');
-    if (deleteBtn) {
-        deleteBtn.onclick = (e) => {
-            e.stopPropagation();
-            if (confirm('이 줄을 삭제할까?')) {
-                row.remove();
-                checkHeaderSaveButton();
-            }
-        };
-    }
-}
-
 function checkAndOpenAuction(row) {
     const isNewRow = row.dataset.isNew === 'true';
-    const qty = parseFloat(row.dataset.qty) || 0;
-    const qtyModified = row.dataset.qtyModified === 'true';
-
     if (isNewRow) {
         alert('New Row일 때는 경매단가 항목 수정팝업을 오픈할 수 없어!');
         return;
     }
 
-    const canOpen = qty >= 1 && !qtyModified;
-
-    if (!canOpen) {
-        alert('수량이 변경되었거나 조건에 맞지 않아 경매단가 팝업을 열 수 없어!');
-        return;
-    }
-
     currentEditingRow = row;
-    const currentUnit = row.dataset.auctionUnit ? Number(row.dataset.auctionUnit) / 100 : '';
+    const currentUnit = row.dataset.auctionUnit ? Number(row.dataset.auctionUnit) : '';
     document.getElementById('auction-unit').value = currentUnit !== 0 ? currentUnit : '';
     document.getElementById('auction-total').value = row.dataset.auctionTotal || '';
     document.getElementById('auctionModal').style.display = 'flex';
@@ -732,16 +773,15 @@ function saveAuctionRow() {
     if (!currentEditingRow) return;
 
     const rawUnit = parseFloat(document.getElementById('auction-unit').value) || 0;
-    const unitVal = rawUnit * 100;
     const qty = parseFloat(currentEditingRow.dataset.qty) || 1;
-    const totalVal = unitVal * qty;
+    const totalVal = rawUnit * qty;
 
-    currentEditingRow.dataset.auctionUnit = unitVal;
+    currentEditingRow.dataset.auctionUnit = rawUnit;
     currentEditingRow.dataset.auctionTotal = totalVal;
     currentEditingRow.dataset.auctionModified = 'true';
 
     const unitCell = currentEditingRow.querySelector('[data-col="auction-unit"]');
-    if (unitCell) unitCell.innerText = unitVal !== 0 ? formatNum(unitVal) : '-';
+    if (unitCell) unitCell.innerText = rawUnit !== 0 ? formatNum(rawUnit) : '-';
     
     const totalCell = currentEditingRow.querySelector('[data-col="auction-total"]');
     if (totalCell) totalCell.innerText = totalVal !== 0 ? formatNum(totalVal) : '-';
@@ -753,24 +793,14 @@ function saveAuctionRow() {
 
 function checkAndOpenDeposit(row) {
     const isNewRow = row.dataset.isNew === 'true';
-    const auctionUnit = parseFloat(row.dataset.auctionUnit) || 0;
-    const auctionModified = row.dataset.auctionModified === 'true';
-
     if (isNewRow) {
         alert('New Row일 때는 입금액 항목 수정팝업을 오픈할 수 없어!');
         return;
     }
 
-    const canOpen = auctionUnit >= 1 && !auctionModified;
-
-    if (!canOpen) {
-        alert('경매단가가 변경되었거나 조건에 맞지 않아 입금액 팝업을 열 수 없어!');
-        return;
-    }
-
     currentEditingRow = row;
     const depositAmount = parseFloat(row.dataset.depositAmount) || 0;
-    document.getElementById('deposit-amount').value = depositAmount !== 0 ? depositAmount / 100 : '';
+    document.getElementById('deposit-amount').value = depositAmount !== 0 ? depositAmount : '';
     document.getElementById('depositModal').style.display = 'flex';
 }
 
@@ -778,15 +808,14 @@ function saveDepositRow() {
     if (!currentEditingRow) return;
 
     const rawDeposit = parseFloat(document.getElementById('deposit-amount').value) || 0;
-    const depositVal = rawDeposit * 100;
     const qty = parseFloat(currentEditingRow.dataset.qty) || 1;
-    const depositUnit = qty > 0 ? (depositVal / qty) : 0;
+    const depositUnit = qty > 0 ? (rawDeposit / qty) : 0;
 
-    currentEditingRow.dataset.depositAmount = depositVal;
+    currentEditingRow.dataset.depositAmount = rawDeposit;
     currentEditingRow.dataset.depositUnit = depositUnit;
 
     const depositCell = currentEditingRow.querySelector('[data-col="deposit-amount"]');
-    if (depositCell) depositCell.innerText = depositVal !== 0 ? formatNum(depositVal) : '-';
+    if (depositCell) depositCell.innerText = rawDeposit !== 0 ? formatNum(rawDeposit) : '-';
 
     const depositUnitCell = currentEditingRow.querySelector('[data-col="deposit-unit"]');
     if (depositUnitCell) depositUnitCell.innerText = depositUnit !== 0 ? formatNum(depositUnit) : '-';
@@ -816,11 +845,37 @@ function checkHeaderSaveButton() {
     }
 }
 
-document.addEventListener('DOMContentLoaded', () => {
-    document.querySelectorAll('#shippingTable tbody tr').forEach(row => {
-        if (!row.classList.contains('farm-subtotal-row') && !row.classList.contains('date-total-row')) {
-            setupRowEvents(row);
+// 이벤트 위임(Event Delegation)을 통한 안정적인 클릭 처리
+document.getElementById('shippingTable').addEventListener('click', (e) => {
+    const td = e.target.closest('td');
+    if (!td) return;
+    const tr = td.closest('tr');
+    
+    // 소계 및 합계 행은 클릭 이벤트 완전 차단
+    if (!tr || tr.classList.contains('farm-subtotal-row') || tr.classList.contains('date-total-row')) return;
+
+    // 삭제 버튼 클릭 처리
+    if (e.target.classList.contains('delete-btn')) {
+        e.stopPropagation();
+        if (confirm('이 줄을 삭제할까?')) {
+            tr.remove();
+            checkHeaderSaveButton();
         }
-    });
+        return;
+    }
+
+    const col = td.dataset.col;
+    if (!col) return;
+
+    e.stopPropagation();
+    
+    // 날짜(date), 밭 이름(farm)은 팝업 오픈 대상에서 제외하고 상품 종류, 수량, 폐기만 오픈
+    if (['product', 'qty', 'disposal'].includes(col)) {
+        checkAndOpenEdit(tr);
+    } else if (['auction-unit', 'auction-total'].includes(col)) {
+        checkAndOpenAuction(tr);
+    } else if (['deposit-amount', 'deposit-unit'].includes(col)) {
+        checkAndOpenDeposit(tr);
+    }
 });
 </script>
