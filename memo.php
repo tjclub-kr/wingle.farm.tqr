@@ -93,7 +93,7 @@ $totalCount = 0;
 $totalPages = 1;
 
 try {
-    $countStmt = $pdo->query("SELECT COUNT(*) FROM memoT");
+    $countStmt = $pdo->query("SELECT COUNT(*) FROM memoT WHERE group_id <> 'outbound'");
     $totalCount = $countStmt->fetchColumn();
     $totalPages = max(1, ceil($totalCount / $limit));
 
@@ -110,6 +110,7 @@ try {
                    (SELECT COUNT(*) FROM {$attachment_table} a WHERE a.att_grp_id = m.id AND a.status = 'ACTIVE') AS file_count
             FROM memoT m 
             LEFT JOIN farms f ON m.group_id = f.farm_id 
+            WHERE m.group_id <> 'outbound' 
             ORDER BY m.id DESC 
             LIMIT :limit OFFSET :offset";
 

@@ -8,6 +8,59 @@ window.TODO_ATTACHMENT_MAX_FILES = 5;
 window.TODO_ATTACHMENT_EXTENSIONS = ['jpg','jpeg','png','gif','webp','pdf','txt','doc','docx','xls','xlsx','hwp','hwpx','zip'];
 </script>
 
+<!-- 상단 헤더 간격 조정 : 갤럭시 S24/S25/S26 등 폭 360px 안팎 화면에서 메뉴 이름이 줄바꿈되지 않도록 함 -->
+<style>
+    /* 메뉴 이름은 어떤 경우에도 한 줄로 표시 */
+    header .header-title {
+        white-space: nowrap;
+        word-break: keep-all;
+    }
+    header .icon-btn,
+    header .header-titles,
+    header .header-right {
+        flex-shrink: 0;
+    }
+
+    /* 휴대폰 화면 (412px 이하) : 좌우 여백, 메뉴 간격, 아이콘 여백을 줄임 */
+    @media (max-width: 420px) {
+        header {
+            padding: 0 6px;
+        }
+        header .icon-btn {
+            padding: 3px;
+        }
+        header > .icon-btn {
+            font-size: 22px;      /* 햄버거 */
+        }
+        header .header-titles {
+            gap: 8px;
+        }
+        header .header-title {
+            font-size: 14px;
+        }
+        header .header-right .icon-btn {
+            font-size: 18px !important; /* 버튼에 지정된 인라인 20px 보다 우선 */
+        }
+    }
+
+    /* 더 좁은 화면 (350px 이하) : 한 단계 더 축소 */
+    @media (max-width: 350px) {
+        header {
+            padding: 0 4px;
+        }
+        header .header-titles {
+            gap: 6px;
+        }
+        header .header-title {
+            font-size: 13px;
+        }
+        header .header-right .icon-btn {
+            font-size: 17px !important;
+            padding: 2px;
+        }
+    }
+</style>
+
 <!-- 1. 상단 메뉴 영역 (헤더) -->
 <header>
     <!-- 왼쪽 햄버거 아이콘 -->
@@ -23,6 +76,15 @@ window.TODO_ATTACHMENT_EXTENSIONS = ['jpg','jpeg','png','gif','webp','pdf','txt'
 
     <!-- 오른쪽 아이콘 묶음 영역 -->
     <div class="header-right">
+        <!-- 원(₩) 아이콘 : 수입 내역(farm_income.php) -->
+        <button
+            class="icon-btn"
+            onclick="loadPage('farm_income.php', '수입 내역')"
+            title="수입 내역"
+            aria-label="수입 내역"
+            style="font-size: 20px; font-weight: bold;"
+        >💰</button>
+
         <!-- 달력 아이콘 -->
         <button
             class="icon-btn"
@@ -51,6 +113,7 @@ window.TODO_ATTACHMENT_EXTENSIONS = ['jpg','jpeg','png','gif','webp','pdf','txt'
             <li><a href="#" onclick="loadPage('outbound.php', '출고 관리'); return false;">출고</a></li>
             <li><a href="#" onclick="loadPage('calendar.php', '달력'); return false;">달력</a></li>
             <li><a href="#" onclick="loadPage('farmSet.php', '밭 설정'); return false;">밭 설정</a></li>
+            <li><a href="#" onclick="loadPage('parsing.php', '분석'); return false;">분석</a></li>
             <!-- li><a href="#" onclick="loadPage('dataClear.php', '데이터클리어'); return false;">데이터클리어</a></li -->
         </ul>
     </nav>
