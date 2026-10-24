@@ -35,6 +35,15 @@ if ($year < 1) {$year = (int)date('Y');
 if ($month < 1 || $month > 12) {$month = (int)date('n');
 }
 
+// 오늘이 포함된 월 이후(미래 월)는 조회 불가 → 현재 월로 보정
+$nowSeoul     = new DateTime('now', $calendarTimezone);
+$maxYear      = (int)$nowSeoul->format('Y');
+$maxMonth     = (int)$nowSeoul->format('n');
+if ($year > $maxYear || ($year === $maxYear && $month > $maxMonth)) {
+    $year  = $maxYear;
+    $month = $maxMonth;
+}
+
 /* --------------------------------------------------
  * 이벤트 데이터 조회 (밭 작업 기록: $sql)
  * -------------------------------------------------- */
@@ -97,15 +106,15 @@ try {
  * -------------------------------------------------- */
 $tasksData = [];
 
+// 오늘의 할일은 날짜 없이 등록되고(task_date = NULL), 완료한 날짜가 task_date 에 기록된다.
+// 이관 개념이 없어졌으므로 일자별로는 "그 날 완료한 할일"만 집계한다.
 $sql2 = "
     SELECT
         task_date,
-        COUNT(*) AS total_tasks,
-        SUM(CASE WHEN completion_status = '완료' THEN 1 ELSE 0 END) AS completed_tasks,
-        SUM(CASE WHEN completion_status != '완료' AND completion_status is not null THEN 1 ELSE 0 END) AS transfer_tasks,
-        SUM(CASE WHEN completion_status is null THEN 1 ELSE 0 END) AS incomplete_tasks
+        COUNT(*) AS completed_tasks
     FROM dailytasksT
-    WHERE task_date >= :start_date
+    WHERE completion_status = '완료'
+      AND task_date >= :start_date
       AND task_date < :end_date
     GROUP BY task_date
 ";
@@ -120,10 +129,8 @@ try {
     foreach ($rows2 as$row) {
         $formattedDate = date('Y-m-d', strtotime($row['task_date']));
         $tasksData[$formattedDate] = [
-            'total'      => (int)$row['total_tasks'],
-            'completed'  => (int)$row['completed_tasks'],
-            'transfer'   => (int)$row['transfer_tasks'],
-            'incomplete' => (int)$row['incomplete_tasks']
+            'total'      => (int)$row['completed_tasks'], // 달력 칸 건수 표시용 (= 완료 건수)
+            'completed'  => (int)$row['completed_tasks']
         ];
     }
 } catch (PDOException $e) {
@@ -135,8 +142,8 @@ $taskIcons = [
     10 => '💧',
     20 => '🌾',
     30 => '✂️',
-    40 => '💊',
-    70 => '🐛',
+    40 => '☠️', // 농약(40~46)
+    70 => '💊', // 영양제(70~72 : 1군/2군/3군)
 ];
 
 /* --------------------------------------------------
@@ -161,6 +168,9 @@ $prevDate->modify('-1 month');
 $nextDate = clone$firstDate;
 $nextDate->modify('+1 month');
 
+// 현재 월을 보고 있으면 다음 달로 이동 불가
+$isCurrentMonth = ($year === $maxYear && $month === $maxMonth);
+
 $prevYear  = (int)$prevDate->format('Y');
 $prevMonth = (int)$prevDate->format('n');
 
@@ -172,7 +182,8 @@ $nextMonth = (int)$nextDate->format('n');
  * -------------------------------------------------- */
 
 $today = (new DateTime('now',$calendarTimezone))->format('Y-m-d');
-$currentYear = date('Y');$currentMonth = date('n');
+$currentYear = $maxYear;
+$currentMonth = $maxMonth;
 
 /* --------------------------------------------------
  * 월 이름 및 URL 설정
@@ -256,7 +267,11 @@ $todayPageUrl = 'calendar.php?year=' . $currentYear . '&month=' .$currentMonth;
         </h1>
 
         <div class="calendar-nav">
-            <button type="button" class="calendar-btn" onclick="loadPage('<?php echo $nextPageUrl; ?>', '달력')" title="다음 달">▶</button>
+            <?php if ($isCurrentMonth): ?>
+                <button type="button" class="calendar-btn" disabled title="다음 달은 조회할 수 없습니다" style="opacity:0.35; cursor:not-allowed;">▶</button>
+            <?php else: ?>
+                <button type="button" class="calendar-btn" onclick="loadPage('<?php echo $nextPageUrl; ?>', '달력')" title="다음 달">▶</button>
+            <?php endif; ?>
             <button type="button" class="calendar-btn today-btn" onclick="loadPage('<?php echo $todayPageUrl; ?>', '달력')">오늘</button>
         </div>
     </div>
@@ -348,6 +363,8 @@ $todayPageUrl = 'calendar.php?year=' . $currentYear . '&month=' .$currentMonth;
 <script>
 window.calendarEventsData = <?php echo json_encode($eventsData, JSON_UNESCAPED_UNICODE); ?>;
 window.calendarTasksData = <?php echo json_encode($tasksData, JSON_UNESCAPED_UNICODE); ?>;
+// 작업(task_id)별 아이콘 : 달력 칸과 동일한 매핑($taskIcons)을 상세 팝업에서도 사용
+window.calendarTaskIcons = <?php echo json_encode($taskIcons, JSON_UNESCAPED_UNICODE); ?>;
 
 function selectCalendarDate(date) {
     const events = window.calendarEventsData[date] || [];
@@ -365,7 +382,7 @@ function selectCalendarDate(date) {
         summaryContainer.innerHTML = `
             <div class="task-summary-box" onclick="goToDailyTasks('${date}')">
                 <div class="task-summary-text">
-                    오늘의 할 일 : 완료 <strong style="color:#2ecc71;">${tasks.completed}</strong>개, 미완료 <strong style="color:#e74c3c;">${tasks.incomplete}</strong>개, 이관 <strong style="color:#f39c12;">${tasks.transfer}</strong>개, 총 <strong>${tasks.total}</strong>개
+                    오늘의 할 일 : 완료 <strong style="color:#2ecc71;">${tasks.completed}</strong>개
                 </div>
             </div>
         `;
@@ -401,14 +418,16 @@ function selectCalendarDate(date) {
                     eventText = `${ev.farm_name}밭 ${ev.y_count}개 이랑에 농약 살포`;
                     break;
                 case 70:
-                    eventText = `${ev.farm_name}밭 ${ev.y_count}개 이랑에서 병충해 발견`;
+                    eventText = `${ev.farm_name}밭 ${ev.y_count}개 이랑에 영양제 투여`;
                     break;
                 default:
                     eventText = `${ev.farm_name}밭 ${ev.y_count}개 이랑에 작업(${ev.task_id}) 적용`;
                     break;
             }
             
-            li.innerText = '🌱 ' + eventText;
+            // 맨 앞에 이벤트(작업)별 아이콘 표시 (매핑에 없는 작업은 📌)
+            const eventIcon = (window.calendarTaskIcons && window.calendarTaskIcons[taskId]) || '📌';
+            li.innerText = eventIcon + ' ' + eventText;
             
             li.onclick = function() {
                 closeCalendarModal();

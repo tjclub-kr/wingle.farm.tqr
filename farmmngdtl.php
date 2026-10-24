@@ -19,8 +19,9 @@ $taskMap = [
     '나군5'  => 44,
     '가군7'  => 45,
     '나군7'  => 46,
-    '병해'   => 70,
-    '충해'   => 71
+    '1군'    => 70,
+    '2군'    => 71,
+    '3군'    => 72
 ];
 
 $reverseTaskMap = [
@@ -34,8 +35,9 @@ $reverseTaskMap = [
     44 => '나군5',
     45 => '가군7',
     46 => '나군7',
-    70 => '병해',
-    71 => '충해'
+    70 => '1군',
+    71 => '2군',
+    72 => '3군'
 ];
 
 // --------------------------------------------------
@@ -268,7 +270,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'get_ridge_info') {
         $rawRows = $stmt->fetchAll();
 
         $pesticideTasks = ['가군1', '가군3', '나군3', '가군5', '나군5', '가군7', '나군7'];
-        $pestTasks      = ['병해', '충해'];
+        $pestTasks      = ['1군', '2군', '3군']; // 영양제
 
         $rows = [];
         foreach ($rawRows as $r) {
@@ -278,7 +280,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'get_ridge_info') {
             if (in_array($wType, $pesticideTasks)) {
                 $displayContent = '[농약 - ' . $wType . ']' . ($dbContent !== '' ? ' ' . $dbContent : '');
             } elseif (in_array($wType, $pestTasks)) {
-                $displayContent = '[병충해 - ' . $wType . ']' . ($dbContent !== '' ? ' ' . $dbContent : '');
+                $displayContent = '[영양제 - ' . $wType . ']' . ($dbContent !== '' ? ' ' . $dbContent : '');
             } else {
                 $displayContent = '[' . $wType . '] ' . ($dbContent !== '' ? $dbContent : '작업완료');
             }
@@ -485,7 +487,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'get_all_ridges_latest') {
             elseif ($taskName === '수확') $category = '수확';
             elseif ($taskName === '옆순') $category = '옆순';
             elseif (strpos($taskName, '농약') !== false || strpos($taskName, '가군') !== false || strpos($taskName, '나군') !== false) $category = '농약';
-            elseif (in_array($taskName, ['병해', '충해'])) $category = '병충해';
+            elseif (in_array($taskName, ['1군', '2군', '3군'])) $category = '영양제';
 
             if ($category && !isset($gridData[$key][$category])) {
                 $gridData[$key][$category] = $rec['work_date'];
@@ -633,7 +635,7 @@ try {
         elseif ($taskName === '수확') $category = '수확';
         elseif ($taskName === '옆순') $category = '옆순';
         elseif (strpos($taskName, '농약') !== false || strpos($taskName, '가군') !== false || strpos($taskName, '나군') !== false) $category = '농약';
-        elseif (in_array($taskName, ['병해', '충해'])) $category = '병충해';
+        elseif (in_array($taskName, ['1군', '2군', '3군'])) $category = '영양제';
 
         if ($category && !isset($initialGridData[$key][$category])) {
             $initialGridData[$key][$category] = $rec['work_date'];
@@ -687,7 +689,7 @@ function getTaskStyleAndText($taskName, $workDate) {
             $textColor = '#e65100';
             $isActive = true;
         }
-    } elseif ($taskName === '병충해') {
+    } elseif ($taskName === '영양제') {
         if ($days <= 3) {
             $bgColor = '#ffebee';
             $textColor = '#c62828';
@@ -902,8 +904,8 @@ $todayDate = date('Y-m-d');
             <button type="button" class="filter-btn" data-filter="물" onclick="toggleFilter(this)" title="물">💧</button>
             <button type="button" class="filter-btn" data-filter="수확" onclick="toggleFilter(this)" title="수확">🌾</button>
             <button type="button" class="filter-btn" data-filter="옆순" onclick="toggleFilter(this)" title="옆순">✂️</button>
-            <button type="button" class="filter-btn" data-filter="농약" onclick="toggleFilter(this)" title="농약">💊</button>
-            <button type="button" class="filter-btn" data-filter="병충해" onclick="toggleFilter(this)" title="병충해">🐛</button>
+            <button type="button" class="filter-btn" data-filter="농약" onclick="toggleFilter(this)" title="농약">☠️</button>
+            <button type="button" class="filter-btn" data-filter="영양제" onclick="toggleFilter(this)" title="영양제">💊</button>
         </div>
     </div>
 
@@ -912,8 +914,8 @@ $todayDate = date('Y-m-d');
             <button type="button" class="status-btn" onclick="openStatusGridModal('물')">💧</button>
             <button type="button" class="status-btn" onclick="openStatusGridModal('수확')">🌾</button>
             <button type="button" class="status-btn" onclick="openStatusGridModal('옆순')">✂️</button>
-            <button type="button" class="status-btn" onclick="openPesticideGridModal()">💊</button>
-            <button type="button" class="status-btn" onclick="openPestGridModal()">🐛</button>
+            <button type="button" class="status-btn" onclick="openPesticideGridModal()">☠️</button>
+            <button type="button" class="status-btn" onclick="openPestGridModal()">💊</button>
         </div>
 
         <div class="main-grid-container" id="mainGridContainer">
@@ -928,7 +930,7 @@ $todayDate = date('Y-m-d');
                     $wHarvest = isset($initialGridData[$ridgeKey]['수확']) ? getTaskStyleAndText('수확', $initialGridData[$ridgeKey]['수확']) : ['text' => '-', 'style' => 'color: #999; background: transparent;'];
                     $wSide    = isset($initialGridData[$ridgeKey]['옆순']) ? getTaskStyleAndText('옆순', $initialGridData[$ridgeKey]['옆순']) : ['text' => '-', 'style' => 'color: #999; background: transparent;'];
                     $wPest    = isset($initialGridData[$ridgeKey]['농약']) ? getTaskStyleAndText('농약', $initialGridData[$ridgeKey]['농약']) : ['text' => '-', 'style' => 'color: #999; background: transparent;'];
-                    $wPestDisease = isset($initialGridData[$ridgeKey]['병충해']) ? getTaskStyleAndText('병충해', $initialGridData[$ridgeKey]['병충해']) : ['text' => '-', 'style' => 'color: #999; background: transparent;'];
+                    $wPestDisease = isset($initialGridData[$ridgeKey]['영양제']) ? getTaskStyleAndText('영양제', $initialGridData[$ridgeKey]['영양제']) : ['text' => '-', 'style' => 'color: #999; background: transparent;'];
 
                     echo "
                     <div class='main-grid-box' onclick=\"openRidgeInfoModal('{$ridgeTitle}', 1, {$r}, {$colNum})\">
@@ -938,7 +940,7 @@ $todayDate = date('Y-m-d');
                             <div class='sub-line-item' data-task='수확' style='{$wHarvest['style']}'><span>수확</span><span>{$wHarvest['text']}</span></div>
                             <div class='sub-line-item' data-task='옆순' style='{$wSide['style']}'><span>옆순</span><span>{$wSide['text']}</span></div>
                             <div class='sub-line-item' data-task='농약' style='{$wPest['style']}'><span>농약</span><span>{$wPest['text']}</span></div>
-                            <div class='sub-line-item' data-task='병충해' style='{$wPestDisease['style']}'><span>병충해</span><span>{$wPestDisease['text']}</span></div>
+                            <div class='sub-line-item' data-task='영양제' style='{$wPestDisease['style']}'><span>영양제</span><span>{$wPestDisease['text']}</span></div>
                         </div>
                     </div>";
                 }
@@ -1090,8 +1092,9 @@ $todayDate = date('Y-m-d');
             <h3>
                 <span id="pestModalTitle">상태 입력</span>
                 <select id="pestSelect" class="pesticide-select">
-                    <option value="병해">병해</option>
-                    <option value="충해">충해</option>
+                    <option value="1군">1군</option>
+                    <option value="2군">2군</option>
+                    <option value="3군">3군</option>
                 </select>
             </h3>
             <span style="cursor:pointer; font-size: 1.2rem;" onclick="closePestGridModal()">✖</span>
@@ -1102,7 +1105,7 @@ $todayDate = date('Y-m-d');
         </div>
         <div class="content-input-row">
             <label for="pestContent">📝 내용 (선택):</label>
-            <textarea id="pestContent" placeholder="병충해 관련 내용을 입력하세요"></textarea>
+            <textarea id="pestContent" placeholder="영양제 관련 내용을 입력하세요"></textarea>
         </div>
         <table class="status-grid-table">
             <thead>
@@ -1228,10 +1231,11 @@ $todayDate = date('Y-m-d');
     <div class="grid-modal-content">
         <div class="grid-modal-header">
             <h3>
-                <span id="pestHistoryBatchTitle">병충해 이랑 상태 수정</span>
+                <span id="pestHistoryBatchTitle">영양제 이랑 상태 수정</span>
                 <select id="pestHistorySelect" class="pesticide-select">
-                    <option value="병해">병해</option>
-                    <option value="충해">충해</option>
+                    <option value="1군">1군</option>
+                    <option value="2군">2군</option>
+                    <option value="3군">3군</option>
                 </select>
             </h3>
             <span style="cursor:pointer; font-size: 1.2rem;" onclick="closePestHistoryBatchModal()">✖</span>
@@ -1630,7 +1634,7 @@ $todayDate = date('Y-m-d');
             if (days > 3) { bgColor = '#e8f5e9'; textColor = '#2e7d32'; isActive = true; }
         } else if (taskName === '농약') {
             if (days <= 3) { bgColor = '#ffe0b2'; textColor = '#e65100'; isActive = true; }
-        } else if (taskName === '병충해') {
+        } else if (taskName === '영양제') {
             if (days <= 3) { bgColor = '#ffebee'; textColor = '#c62828'; isActive = true; }
         }
 
@@ -1644,7 +1648,7 @@ $todayDate = date('Y-m-d');
         .then(res => {
             if (res.success) {
                 const gridData = res.data;
-                const tasks = ['물', '수확', '옆순', '농약', '병충해'];
+                const tasks = ['물', '수확', '옆순', '농약', '영양제'];
                 for (let r = 1; r <= <?php echo $colCount; ?>; r++) {
                     const cols = <?php echo json_encode($cols); ?>;
                     cols.forEach(c => {
@@ -1753,7 +1757,7 @@ $todayDate = date('Y-m-d');
 
     function openBatchModalByTask(taskId, createdMinute, workType) {
         const pesticideTasks = [40, 41, 42, 43, 44, 45, 46];
-        const pestTasks = [70, 71];
+        const pestTasks = [70, 71, 72]; // 영양제 (1군/2군/3군)
 
         if (pesticideTasks.includes(Number(taskId))) {
             openPesticideHistoryBatchModal(taskId, createdMinute, workType);
@@ -1839,7 +1843,7 @@ $todayDate = date('Y-m-d');
         currentPestBatchCreatedMinute = createdMinute;
 
         uncheckAllGrids('pestHistoryBatchModal');
-        document.getElementById('pestHistoryBatchTitle').innerText = `병충해 이랑 상태 수정`;
+        document.getElementById('pestHistoryBatchTitle').innerText = `영양제 이랑 상태 수정`;
         document.getElementById('pestHistorySelect').value = workType;
         document.getElementById('pestHistoryBatchDate').value = createdMinute.substring(0, 10);
 
@@ -1865,7 +1869,7 @@ $todayDate = date('Y-m-d');
 
     function savePestHistoryBatchGrid() {
         const selectedWorkType = document.getElementById('pestHistorySelect').value;
-        const pestTaskMap = { '병해': 70, '충해': 71 };
+        const pestTaskMap = { '1군': 70, '2군': 71, '3군': 72 };
         const newTaskId = pestTaskMap[selectedWorkType] || currentPestBatchTaskId;
         saveBatchGridCommon('pestHistoryBatchModal', currentPestBatchTaskId, currentPestBatchCreatedMinute, 'pestHistoryBatchDate', 'pestHistoryBatchContent', closePestHistoryBatchModal, newTaskId);
     }
