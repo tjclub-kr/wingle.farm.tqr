@@ -7,7 +7,7 @@ $db_host = 'www.tjclub.kr';
 $db_port = '13306';
 $db_name = 'tqrDB';
 $db_user = 'tqr';
-$db_pass = '!dhEkqkffh2';
+$db_pass = '!Xlzbdkfdb2';
 
 try {
     $dsn = "mysql:host={$db_host};port={$db_port};dbname={$db_name};charset=utf8mb4";

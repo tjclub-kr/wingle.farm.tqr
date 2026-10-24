@@ -135,10 +135,6 @@ window.TODO_ATTACHMENT_EXTENSIONS = ['jpg','jpeg','png','gif','webp','pdf','txt'
     <div class="modal-content">
         <h3>새 할일 추가</h3>
         <div class="form-group">
-            <label for="todo-date">날짜 (task_date)</label>
-            <input type="date" id="todo-date" required>
-        </div>
-        <div class="form-group">
             <label for="todo-content">할일 내용 (content)</label>
             <textarea id="todo-content" rows="7" placeholder="무엇을 해야 하나요?" required></textarea>
         </div>
@@ -220,15 +216,6 @@ window.TODO_ATTACHMENT_EXTENSIONS = ['jpg','jpeg','png','gif','webp','pdf','txt'
 
     function openTodoModal() {
         closeAllMenus();
-        const today = new Date();
-        const localDate = new Date(today.getTime() - (today.getTimezoneOffset() * 60000)).toISOString().split('T')[0];
-        
-        const dateInput = document.getElementById('todo-date');
-        if (dateInput) {
-            dateInput.value = localDate;
-            dateInput.min = localDate;
-        }
-
         const contentInput = document.getElementById('todo-content');
         if (contentInput) contentInput.value = '';
         
@@ -258,16 +245,15 @@ window.TODO_ATTACHMENT_EXTENSIONS = ['jpg','jpeg','png','gif','webp','pdf','txt'
     }
 
     function saveTodo() {
-        const taskDate = document.getElementById('todo-date').value;
         const content = document.getElementById('todo-content').value;
 
-        if (!taskDate || !content.trim()) {
-            alert('날짜와 할일 내용을 모두 입력해 줘!');
+        if (!content.trim()) {
+            alert('할일 내용을 입력해 줘!');
             return;
         }
 
+        // 날짜는 입력받지 않는다 (서버에서 task_date = NULL 로 등록)
         const formData = new FormData();
-        formData.append('task_date', taskDate);
         formData.append('content', content);
         
         const files = document.getElementById('todo-attachments')?.files || [];
@@ -289,7 +275,7 @@ window.TODO_ATTACHMENT_EXTENSIONS = ['jpg','jpeg','png','gif','webp','pdf','txt'
         .then(data => {
             alert('할일이 성공적으로 저장됐어!');
             closeTodoModal();
-            // 현재 보고 있던 페이지가 할 일 페이지면, 해당 날짜(파라미터 포함된 URL)를 그대로 유지하며 새로고침
+            // 현재 보고 있던 페이지가 할 일 페이지면, 보고 있던 날짜(파라미터 포함된 URL)를 그대로 유지하며 새로고침
             if (currentPageUrl.includes('dailytasks.php')) {
                 loadPage(currentPageUrl, '오늘의 할일');
             }
