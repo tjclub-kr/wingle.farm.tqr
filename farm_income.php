@@ -27,6 +27,10 @@
  *     · 바라 / 바찹 / 찹찹 / 옆순 4종류의 일자별 경매단가 꺾은선 그래프 (같은 날 같은 종류가 여러 건이면 가장 높은 단가)
  *     · 상단 범례(이름+색상)를 터치하면 해당 종류 그래프 숨김/표시 (숨김 상태는 이름과 색상이 회색)
  *     · 그래프 데이터는 GET ?action=price&year=YYYY&month=M 요청에 JSON 으로 응답한다.
+ * - 상세 그리드의 [입금액] 헤더 옆 그래프 아이콘(📈)을 터치하면 '일자별 수익' 그래프 팝업이 열린다.
+ *     · 타이틀 '일자별 수익' 앞/뒤 화살표로 이전/다음 월 이동 (경매단가 그래프와 동일, 오늘이 속한 월 이후 이동 불가)
+ *     · 해당 월의 입금액을 일자별로 합산한 금액을 꺾은선 그래프로 표시
+ *     · 그래프 데이터는 GET ?action=daily&year=YYYY&month=M 요청에 JSON 으로 응답한다.
  */
 declare(strict_types=1);
 
@@ -238,6 +242,63 @@ if (($_GET['action'] ?? '') === 'price') {
     } catch (Throwable $e) {
         error_log('[farm_income price] ' . $e->getMessage());
         farm_income_json(['success' => false, 'message' => '경매단가 조회 중 DB 오류가 발생했습니다.'], 500);
+    }
+}
+
+/* --------------------------------------------------
+ * 일자별 수익 합계 조회 (그래프 팝업용 JSON)
+ *   해당 월(상세 그리드의 날짜 기준)의 입금액을 일자별로 합산하여 반환
+ * -------------------------------------------------- */
+if (($_GET['action'] ?? '') === 'daily') {
+    $sYear  = (string)($_GET['year'] ?? '');
+    $sMonth = (string)($_GET['month'] ?? '');
+
+    if (!preg_match('/^\d{4}$/', $sYear) || !preg_match('/^\d{1,2}$/', $sMonth)
+        || (int)$sYear < 2000 || (int)$sYear > 2100 || (int)$sMonth < 1 || (int)$sMonth > 12) {
+        farm_income_json(['success' => false, 'message' => '조회 조건이 올바르지 않습니다.'], 400);
+    }
+
+    $sStart = sprintf('%04d-%02d-01', (int)$sYear, (int)$sMonth);
+    $sEnd   = (new DateTimeImmutable($sStart))->modify('+1 month')->format('Y-m-d');
+
+    try {
+        $stmt = $pdo->prepare("
+            SELECT
+                COALESCE(o.outbound_date, fi.income_date)      AS sum_date,
+                SUM(COALESCE(o.deposit_amount, fi.amount))     AS total_amount
+            FROM farm_income fi
+            LEFT JOIN outbound o
+                   ON o.outbound_id = fi.outbound_id
+            LEFT JOIN farms f
+                   ON f.farm_id = fi.farm_id
+            WHERE COALESCE(o.outbound_date, fi.income_date) >= :start_date
+              AND COALESCE(o.outbound_date, fi.income_date) <  :end_date
+              AND f.use_yn = 'Y'                       -- 상세 그리드와 동일하게 사용 중인 밭만
+            GROUP BY COALESCE(o.outbound_date, fi.income_date)
+            ORDER BY sum_date ASC
+        ");
+        $stmt->bindValue(':start_date', $sStart, PDO::PARAM_STR);
+        $stmt->bindValue(':end_date', $sEnd, PDO::PARAM_STR);
+        $stmt->execute();
+
+        $days = [];
+        foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            $days[] = [
+                'date'  => substr((string)$r['sum_date'], 0, 10),
+                'total' => (float)$r['total_amount'],
+            ];
+        }
+
+        farm_income_json([
+            'success' => true,
+            'year'    => (int)$sYear,
+            'month'   => (int)$sMonth,
+            'lastDay' => (int)(new DateTimeImmutable($sStart))->format('t'),
+            'days'    => $days,
+        ]);
+    } catch (Throwable $e) {
+        error_log('[farm_income daily] ' . $e->getMessage());
+        farm_income_json(['success' => false, 'message' => '일자별 수익 조회 중 DB 오류가 발생했습니다.'], 500);
     }
 }
 
@@ -699,6 +760,13 @@ $yearCount = array_sum($monthCount);
     }
     .income-chart-legend button.off { color: #aaa; border-color: #e5e5e5; }
     .income-chart-legend button.off .swatch { background: #ccc !important; }
+    .income-chart-sub {
+        text-align: center;
+        font-size: 13px;
+        font-weight: bold;
+        color: #4a148c;
+        margin-bottom: 6px;
+    }
     .income-chart-body svg { display: block; width: 100%; height: auto; }
     .income-chart-info {
         min-height: 18px;
@@ -813,6 +881,23 @@ $yearCount = array_sum($monthCount);
     </div>
 </div>
 
+<!-- 일자별 수익 그래프 팝업 (상세 팝업 위에 추가로 열림) -->
+<div class="income-chart-overlay" id="incomeSumModal" onclick="if (event.target === this) farmIncomeCloseSumChart();">
+    <div class="income-chart-content">
+        <div class="income-chart-head">
+            <button type="button" class="income-year-btn" id="incomeSumPrev" onclick="farmIncomeSumChartMove(-1)" title="이전 월">◀</button>
+            <h3>일자별 수익</h3>
+            <button type="button" class="income-year-btn" id="incomeSumNext" onclick="farmIncomeSumChartMove(1)" title="다음 월">▶</button>
+        </div>
+        <div class="income-chart-sub" id="incomeSumMonth"></div>
+        <div class="income-chart-body" id="incomeSumBody"></div>
+        <div class="income-chart-info" id="incomeSumInfo"></div>
+        <div class="income-modal-actions">
+            <button type="button" onclick="farmIncomeCloseSumChart()">닫기</button>
+        </div>
+    </div>
+</div>
+
 <script>
 // 오늘이 속한 년/월 : 그래프 팝업에서 이 월 이후로는 이동 불가
 const FARM_INCOME_NOW_Y = <?= (int)$currentYear ?>;
@@ -844,6 +929,7 @@ function farmIncomeCloseDetail() {
     if (modal) modal.style.display = 'none';
     farmIncomeCloseMemo();
     farmIncomeCloseChart();
+    farmIncomeCloseSumChart();
 }
 
 // 월 Row 터치 : 해당 월의 수익 상세(출고날짜, 밭이름, 상품종류, 수량, 폐기, 경매단가, 입금액) 팝업
@@ -971,7 +1057,7 @@ function farmIncomeRenderDetail(body, items) {
     let html = farmIncomeBuildFarmSummary(items)
         + '<div class="income-detail-subtitle">일자별 상세</div>'
         + '<div class="income-detail-container"><table class="income-detail-table"><thead><tr>'
-        + '<th>날짜</th><th>밭</th><th>상품<br>종류</th><th>수<br>량</th><th>폐<br>기</th><th class="income-price-th">경매<br>단가<button type="button" class="income-graph-icon" title="경매단가 그래프" aria-label="경매단가 그래프" onclick="farmIncomeOpenChart()">📈</button></th><th>입금액</th><th>메모</th>'
+        + '<th>날짜</th><th>밭</th><th>상품<br>종류</th><th>수<br>량</th><th>폐<br>기</th><th class="income-price-th">경매<br>단가<button type="button" class="income-graph-icon" title="경매단가 그래프" aria-label="경매단가 그래프" onclick="farmIncomeOpenChart()">📈</button></th><th class="income-price-th">입금<br>액<button type="button" class="income-graph-icon" title="일자별 수익 그래프" aria-label="일자별 수익 그래프" onclick="farmIncomeOpenSumChart()">📈</button></th><th>메모</th>'
         + '</tr></thead><tbody>';
 
     // 세로 병합(rowspan) 계산 : 서버에서 일자 → 밭 순으로 정렬되어 있으므로 연속된 같은 값끼리 묶는다.
@@ -1260,6 +1346,142 @@ function farmIncomeChartRender() {
             svg += '<circle cx="' + x + '" cy="' + y + '" r="3" fill="#fff" stroke="' + t.color + '" stroke-width="2"/>'
                 + '<circle cx="' + x + '" cy="' + y + '" r="10" fill="transparent" style="cursor:pointer" onclick="farmIncomeChartPoint(' + i + ',' + d + ')"/>';
         });
+    });
+
+    body.innerHTML = svg + '</svg>';
+}
+/* ==================================================
+ * 일자별 수익 그래프 (입금액을 일자별로 합산 / 인라인 SVG)
+ * ================================================== */
+window.farmIncomeSumChart = { year: 0, month: 0, lastDay: 31, data: {}, status: 'loading', message: '', token: 0 };
+
+function farmIncomeOpenSumChart() {
+    const c = window.farmIncomeSumChart;
+    c.year = Number(window.farmIncomeDetailYear) || FARM_INCOME_NOW_Y;
+    c.month = Number(window.farmIncomeDetailMonth) || FARM_INCOME_NOW_M;
+    document.getElementById('incomeSumModal').style.display = 'flex';
+    farmIncomeSumChartLoad();
+}
+
+function farmIncomeCloseSumChart() {
+    window.farmIncomeSumChart.token++; // 진행 중인 요청 결과 무시
+    const modal = document.getElementById('incomeSumModal');
+    if (modal) modal.style.display = 'none';
+}
+
+// 이전(-1) / 다음(+1) 월 이동 : 경매단가 그래프와 동일 (오늘이 속한 월 이후로는 이동 불가)
+function farmIncomeSumChartMove(delta) {
+    const c = window.farmIncomeSumChart;
+    let y = c.year, m = c.month + delta;
+    if (m < 1) { m = 12; y--; }
+    if (m > 12) { m = 1; y++; }
+    if (y < 2000) return;
+    if (y > FARM_INCOME_NOW_Y || (y === FARM_INCOME_NOW_Y && m > FARM_INCOME_NOW_M)) return;
+    c.year = y;
+    c.month = m;
+    farmIncomeSumChartLoad();
+}
+
+function farmIncomeSumChartLoad() {
+    const c = window.farmIncomeSumChart;
+    const token = ++c.token;
+    c.status = 'loading';
+    c.data = {};
+    c.lastDay = new Date(c.year, c.month, 0).getDate();
+    document.getElementById('incomeSumInfo').textContent = '';
+    farmIncomeSumChartRender();
+
+    fetch('farm_income.php?action=daily&year=' + encodeURIComponent(c.year) + '&month=' + encodeURIComponent(c.month), {
+        headers: { 'X-Requested-With': 'XMLHttpRequest' }
+    })
+        .then(function (res) {
+            return res.json().catch(function () { return { success: false, message: '서버 응답이 올바르지 않습니다.' }; });
+        })
+        .then(function (data) {
+            if (token !== c.token) return; // 닫혔거나 다른 월 요청
+            if (!data || !data.success) {
+                c.status = 'error';
+                c.message = (data && data.message) || '조회 중 오류가 발생했습니다.';
+            } else {
+                c.lastDay = Number(data.lastDay) || c.lastDay;
+                let count = 0;
+                (data.days || []).forEach(function (r) {
+                    const day = parseInt(String(r.date).substring(8, 10), 10);
+                    const total = Number(r.total);
+                    if (!day || !(total > 0)) return;
+                    c.data[day] = (c.data[day] || 0) + total;
+                    count++;
+                });
+                c.status = count > 0 ? 'ok' : 'empty';
+            }
+            farmIncomeSumChartRender();
+        })
+        .catch(function () {
+            if (token !== c.token) return;
+            c.status = 'error';
+            c.message = '일자별 수익을 조회하지 못했습니다. 네트워크를 확인해 주세요.';
+            farmIncomeSumChartRender();
+        });
+}
+
+// 점 터치 : 해당 일자의 수익 합계를 하단에 표시
+function farmIncomeSumChartPoint(day) {
+    const c = window.farmIncomeSumChart;
+    if (!c.data[day]) return;
+    document.getElementById('incomeSumInfo').textContent =
+        String(c.month).padStart(2, '0') + '/' + String(day).padStart(2, '0') + ' : ' + farmIncomeNum(c.data[day]) + '원';
+}
+
+function farmIncomeSumChartRender() {
+    const c = window.farmIncomeSumChart;
+
+    document.getElementById('incomeSumMonth').textContent = c.year + '년 ' + String(c.month).padStart(2, '0') + '월';
+    document.getElementById('incomeSumPrev').disabled = (c.year <= 2000 && c.month <= 1);
+    document.getElementById('incomeSumNext').disabled = (c.year > FARM_INCOME_NOW_Y || (c.year === FARM_INCOME_NOW_Y && c.month >= FARM_INCOME_NOW_M));
+
+    const body = document.getElementById('incomeSumBody');
+    if (c.status === 'loading') { body.innerHTML = '<div class="income-detail-msg">불러오는 중...</div>'; return; }
+    if (c.status === 'error') { body.innerHTML = '<div class="income-detail-msg error">' + farmIncomeEsc(c.message) + '</div>'; return; }
+    if (c.status === 'empty') { body.innerHTML = '<div class="income-detail-msg">해당 월의 수익 데이터가 없습니다.</div>'; return; }
+
+    const COLOR = '#4a148c';
+    const days = Object.keys(c.data).map(Number).sort(function (a, b) { return a - b; });
+    const maxVal = Math.max.apply(null, days.map(function (d) { return c.data[d]; }));
+    const ticks = farmIncomeNiceTicks(0, maxVal, 4);
+    const yMin = ticks[0], yMax = ticks[ticks.length - 1];
+
+    const W = 360, H = 250, L = 62, R = 12, T = 10, B = 24; // 금액 자릿수가 크므로 왼쪽 여백을 넓게
+    const PW = W - L - R, PH = H - T - B;
+    const last = Math.max(c.lastDay, 2);
+    function xOf(day) { return L + (day - 1) / (last - 1) * PW; }
+    function yOf(v) { return T + (1 - (v - yMin) / (yMax - yMin || 1)) * PH; }
+
+    let svg = '<svg viewBox="0 0 ' + W + ' ' + H + '" xmlns="http://www.w3.org/2000/svg" font-family="inherit">';
+
+    ticks.forEach(function (v) {
+        const y = yOf(v);
+        svg += '<line x1="' + L + '" y1="' + y + '" x2="' + (W - R) + '" y2="' + y + '" stroke="#e6e0ee" stroke-width="1"/>'
+            + '<text x="' + (L - 4) + '" y="' + (y + 3) + '" font-size="9" fill="#666" text-anchor="end">' + farmIncomeNum(v) + '</text>';
+    });
+
+    const xDays = [1, 5, 10, 15, 20, 25].filter(function (d) { return d <= c.lastDay; });
+    if (c.lastDay - xDays[xDays.length - 1] >= 3) xDays.push(c.lastDay);
+    xDays.forEach(function (d) {
+        const x = xOf(d);
+        svg += '<line x1="' + x + '" y1="' + T + '" x2="' + x + '" y2="' + (T + PH) + '" stroke="#f1edf6" stroke-width="1"/>'
+            + '<text x="' + x + '" y="' + (H - 8) + '" font-size="9" fill="#666" text-anchor="middle">' + d + '</text>';
+    });
+    svg += '<line x1="' + L + '" y1="' + (T + PH) + '" x2="' + (W - R) + '" y2="' + (T + PH) + '" stroke="#b9a9cf" stroke-width="1"/>'
+        + '<line x1="' + L + '" y1="' + T + '" x2="' + L + '" y2="' + (T + PH) + '" stroke="#b9a9cf" stroke-width="1"/>';
+
+    if (days.length > 1) {
+        const pts = days.map(function (d) { return xOf(d).toFixed(1) + ',' + yOf(c.data[d]).toFixed(1); }).join(' ');
+        svg += '<polyline points="' + pts + '" fill="none" stroke="' + COLOR + '" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>';
+    }
+    days.forEach(function (d) {
+        const x = xOf(d).toFixed(1), y = yOf(c.data[d]).toFixed(1);
+        svg += '<circle cx="' + x + '" cy="' + y + '" r="3" fill="#fff" stroke="' + COLOR + '" stroke-width="2"/>'
+            + '<circle cx="' + x + '" cy="' + y + '" r="10" fill="transparent" style="cursor:pointer" onclick="farmIncomeSumChartPoint(' + d + ')"/>';
     });
 
     body.innerHTML = svg + '</svg>';

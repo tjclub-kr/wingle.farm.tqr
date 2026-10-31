@@ -113,7 +113,8 @@ window.TODO_ATTACHMENT_EXTENSIONS = ['jpg','jpeg','png','gif','webp','pdf','txt'
             <li><a href="#" onclick="loadPage('outbound.php', '출고 관리'); return false;">출고</a></li>
             <li><a href="#" onclick="loadPage('calendar.php', '달력'); return false;">달력</a></li>
             <li><a href="#" onclick="loadPage('farmSet.php', '밭 설정'); return false;">밭 설정</a></li>
-            <li><a href="#" onclick="loadPage('parsing.php', '분석'); return false;">분석</a></li>
+<!--            <li><a href="#" onclick="loadPage('parsing.php', '분석'); return false;">분석</a></li> -->
+<!--            <li><a href="#" onclick="loadPage('environment_monitoring.php', '환경정보'); return false;">환경정보</a></li> -->
             <!-- li><a href="#" onclick="loadPage('dataClear.php', '데이터클리어'); return false;">데이터클리어</a></li -->
         </ul>
     </nav>
@@ -134,6 +135,22 @@ window.TODO_ATTACHMENT_EXTENSIONS = ['jpg','jpeg','png','gif','webp','pdf','txt'
 <div class="modal-overlay" id="todoModal">
     <div class="modal-content">
         <h3>새 할일 추가</h3>
+        <div class="form-group">
+            <label for="todo-date">일자 (선택)</label>
+            <div style="display:flex; gap:6px; align-items:stretch;">
+                <!-- 기본값은 빈 값 / 달력(입력칸)을 누르면 오늘이 표시됨 / 오늘 이전은 선택 불가 -->
+                <input type="date" id="todo-date" style="flex:1; min-width:0;" onclick="fillTodoDateWithToday()">
+                <button type="button" onclick="clearTodoDate()" style="padding:0 10px; border:1px solid #ddd; background:#f5f5f5; border-radius:6px; font-size:13px; cursor:pointer; white-space:nowrap;">지움</button>
+            </div>
+        </div>
+        <div class="form-group">
+            <label for="todo-importance">중요도</label>
+            <select id="todo-importance" style="width:100%; padding:10px; border:1px solid #ddd; border-radius:6px; font-size:15px; font-family:inherit; background:#fff;">
+                <option value="1">상</option>
+                <option value="2">중</option>
+                <option value="3" selected>하</option>
+            </select>
+        </div>
         <div class="form-group">
             <label for="todo-content">할일 내용 (content)</label>
             <textarea id="todo-content" rows="7" placeholder="무엇을 해야 하나요?" required></textarea>
@@ -216,6 +233,20 @@ window.TODO_ATTACHMENT_EXTENSIONS = ['jpg','jpeg','png','gif','webp','pdf','txt'
 
     function openTodoModal() {
         closeAllMenus();
+        const today = new Date();
+        const localDate = new Date(today.getTime() - (today.getTimezoneOffset() * 60000)).toISOString().split('T')[0];
+        
+        // 등록일자 기본값은 빈 값 (오늘 이전은 선택 불가)
+        const dateInput = document.getElementById('todo-date');
+        if (dateInput) {
+            dateInput.value = '';
+            dateInput.min = localDate;
+        }
+
+        // 중요도 기본값은 3 하
+        const importanceInput = document.getElementById('todo-importance');
+        if (importanceInput) importanceInput.value = '3';
+
         const contentInput = document.getElementById('todo-content');
         if (contentInput) contentInput.value = '';
         
@@ -229,6 +260,24 @@ window.TODO_ATTACHMENT_EXTENSIONS = ['jpg','jpeg','png','gif','webp','pdf','txt'
         
         const todoModal = document.getElementById('todoModal');
         if (todoModal) todoModal.style.display = 'flex';
+    }
+
+    // 오늘 날짜(YYYY-MM-DD, 로컬 기준)
+    function getTodayLocalDate() {
+        const now = new Date();
+        return new Date(now.getTime() - (now.getTimezoneOffset() * 60000)).toISOString().split('T')[0];
+    }
+
+    // 등록일자가 비어 있을 때 달력을 누르면 오늘이 표시되도록 함
+    function fillTodoDateWithToday() {
+        const dateInput = document.getElementById('todo-date');
+        if (dateInput && !dateInput.value) dateInput.value = getTodayLocalDate();
+    }
+
+    // 등록일자 지우기 (등록일자 없이 등록)
+    function clearTodoDate() {
+        const dateInput = document.getElementById('todo-date');
+        if (dateInput) dateInput.value = '';
     }
 
     function closeTodoModal() {
@@ -245,16 +294,23 @@ window.TODO_ATTACHMENT_EXTENSIONS = ['jpg','jpeg','png','gif','webp','pdf','txt'
     }
 
     function saveTodo() {
+        const taskDate = document.getElementById('todo-date').value; // 선택 입력 (빈 값이면 등록일자 없이 등록)
         const content = document.getElementById('todo-content').value;
+        const importance = document.getElementById('todo-importance').value || '3';
 
         if (!content.trim()) {
             alert('할일 내용을 입력해 줘!');
             return;
         }
+        if (taskDate && taskDate < getTodayLocalDate()) {
+            alert('오늘 이전 날짜로는 등록할 수 없어!');
+            return;
+        }
 
-        // 날짜는 입력받지 않는다 (서버에서 task_date = NULL 로 등록)
         const formData = new FormData();
+        if (taskDate) formData.append('task_date', taskDate);
         formData.append('content', content);
+        formData.append('importance', importance);
         
         const files = document.getElementById('todo-attachments')?.files || [];
         const maxFiles = Number(window.TODO_ATTACHMENT_MAX_FILES || 5);

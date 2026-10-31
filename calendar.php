@@ -35,14 +35,8 @@ if ($year < 1) {$year = (int)date('Y');
 if ($month < 1 || $month > 12) {$month = (int)date('n');
 }
 
-// 오늘이 포함된 월 이후(미래 월)는 조회 불가 → 현재 월로 보정
-$nowSeoul     = new DateTime('now', $calendarTimezone);
-$maxYear      = (int)$nowSeoul->format('Y');
-$maxMonth     = (int)$nowSeoul->format('n');
-if ($year > $maxYear || ($year === $maxYear && $month > $maxMonth)) {
-    $year  = $maxYear;
-    $month = $maxMonth;
-}
+// 오늘 이후 월도 자유롭게 이동 가능 (월 제한 없음)
+$nowInSeoul = new DateTime('now', $calendarTimezone);
 
 /* --------------------------------------------------
  * 이벤트 데이터 조회 (밭 작업 기록: $sql)
@@ -103,38 +97,92 @@ try {
 
 /* --------------------------------------------------
  * 오늘의 할 일 데이터 조회 ($sql2)
- * -------------------------------------------------- */
+ * --------------------------------------------------
+ * 달력 칸 표시 규칙 (task_date = 등록일자)
+ *  - 오늘      : (등록일자 없는 미완료) + (등록일자 오늘의 완료) + (등록일자 오늘의 미완료)
+ *  - 오늘 이전 : 등록일자가 해당 날짜이고 완료한 건수
+ *  - 오늘 이후 : 등록일자가 해당 날짜이고 미완료 건수
+ */
 $tasksData = [];
+$todayYmd  = $nowInSeoul->format('Y-m-d');
 
-// 오늘의 할일은 날짜 없이 등록되고(task_date = NULL), 완료한 날짜가 task_date 에 기록된다.
-// 이관 개념이 없어졌으므로 일자별로는 "그 날 완료한 할일"만 집계한다.
+// 조회 월의 일자별 완료 / 미완료 건수 (completion_status 가 '완료'가 아니면 미완료로 간주)
 $sql2 = "
     SELECT
-        task_date,
-        COUNT(*) AS completed_tasks
+        DATE(task_date) AS task_day,
+        SUM(CASE WHEN completion_status = '완료' THEN 1 ELSE 0 END) AS done_cnt,
+        SUM(CASE WHEN completion_status = '완료' THEN 0 ELSE 1 END) AS undone_cnt
     FROM dailytasksT
-    WHERE completion_status = '완료'
-      AND task_date >= :start_date
+    WHERE task_date >= :start_date
       AND task_date < :end_date
-    GROUP BY task_date
+    GROUP BY DATE(task_date)
 ";
 
+// 등록일자가 없는(NULL) 미완료 할일 건수 → 오늘 칸에만 합산
+$sql3 = "
+    SELECT COUNT(*) AS undone_cnt
+    FROM dailytasksT
+    WHERE task_date IS NULL
+      AND (completion_status IS NULL OR completion_status <> '완료')
+";
+
+$taskCounts = []; // [Y-m-d => ['done' => n, 'undone' => n]]
 try {
-    $stmt2 =$pdo->prepare($sql2);$stmt2->execute([
+    $stmt2 = $pdo->prepare($sql2);
+    $stmt2->execute([
         'start_date' => $startDate,
         'end_date'   => $endDate
     ]);
-    $rows2 =$stmt2->fetchAll();
-
-    foreach ($rows2 as$row) {
-        $formattedDate = date('Y-m-d', strtotime($row['task_date']));
-        $tasksData[$formattedDate] = [
-            'total'      => (int)$row['completed_tasks'], // 달력 칸 건수 표시용 (= 완료 건수)
-            'completed'  => (int)$row['completed_tasks']
+    foreach ($stmt2->fetchAll() as $row) {
+        $taskCounts[$row['task_day']] = [
+            'done'   => (int)$row['done_cnt'],
+            'undone' => (int)$row['undone_cnt']
         ];
     }
 } catch (PDOException $e) {
     // error_log("DB 오류 (tasks): " . $e->getMessage());
+}
+
+// 오늘이 조회 월에 포함될 때만 등록일자 없는 미완료 건수를 조회
+$nullUndone  = 0;
+$todayInView = (substr($todayYmd, 0, 7) === sprintf('%04d-%02d', $year, $month));
+if ($todayInView) {
+    try {
+        $nullUndone = (int)$pdo->query($sql3)->fetchColumn();
+    } catch (PDOException $e) {
+        // error_log("DB 오류 (tasks null): " . $e->getMessage());
+    }
+}
+
+// 날짜별 표시 건수 계산
+$taskDates = array_keys($taskCounts);
+if ($todayInView) {
+    $taskDates[] = $todayYmd;
+}
+foreach (array_unique($taskDates) as $d) {
+    $done   = $taskCounts[$d]['done']   ?? 0;
+    $undone = $taskCounts[$d]['undone'] ?? 0;
+
+    if ($d === $todayYmd) {
+        $mode      = 'today';
+        $undone   += $nullUndone;     // 등록일자 없는 미완료 포함
+        $total     = $done + $undone;
+    } elseif ($d < $todayYmd) {
+        $mode  = 'past';
+        $total = $done;               // 이전 날짜: 완료 건수
+    } else {
+        $mode  = 'future';
+        $total = $undone;             // 이후 날짜: 미완료 건수
+    }
+
+    if ($total > 0) {
+        $tasksData[$d] = [
+            'total'      => $total,   // 달력 칸 표시 건수
+            'completed'  => $done,
+            'incomplete' => $undone,
+            'mode'       => $mode
+        ];
+    }
 }
 
 // Task ID별 아이콘 매핑 (DB 결과의 task_id 값 반영)
@@ -168,9 +216,6 @@ $prevDate->modify('-1 month');
 $nextDate = clone$firstDate;
 $nextDate->modify('+1 month');
 
-// 현재 월을 보고 있으면 다음 달로 이동 불가
-$isCurrentMonth = ($year === $maxYear && $month === $maxMonth);
-
 $prevYear  = (int)$prevDate->format('Y');
 $prevMonth = (int)$prevDate->format('n');
 
@@ -182,8 +227,7 @@ $nextMonth = (int)$nextDate->format('n');
  * -------------------------------------------------- */
 
 $today = (new DateTime('now',$calendarTimezone))->format('Y-m-d');
-$currentYear = $maxYear;
-$currentMonth = $maxMonth;
+$currentYear = date('Y');$currentMonth = date('n');
 
 /* --------------------------------------------------
  * 월 이름 및 URL 설정
@@ -210,6 +254,7 @@ $todayPageUrl = 'calendar.php?year=' . $currentYear . '&month=' .$currentMonth;
     .calendar-nav { display: flex; align-items: center; gap: 4px; }
     .calendar-btn { min-width: 36px; height: 28px; padding: 0 8px; border: 1px solid #d1d5db; border-radius: 6px; background: #fff; color: #333; cursor: pointer; font-size: 13px; text-decoration: none; display: inline-flex; align-items: center; justify-content: center; transition: 0.15s; }
     .calendar-btn:hover { background: #f3f4f6; }
+    .calendar-btn:disabled { opacity: 0.3; cursor: default; background: #fff; }
     .calendar-btn.today-btn { min-width: 52px; }
     .calendar-week { display: grid; grid-template-columns: repeat(7, 1fr); background: #fafafa; border-bottom: 1px solid #e5e7eb; }
     .weekday { padding: 6px 2px; text-align: center; font-weight: 700; font-size: 12px; color: #555; border-right: 1px solid #eee; }
@@ -267,11 +312,7 @@ $todayPageUrl = 'calendar.php?year=' . $currentYear . '&month=' .$currentMonth;
         </h1>
 
         <div class="calendar-nav">
-            <?php if ($isCurrentMonth): ?>
-                <button type="button" class="calendar-btn" disabled title="다음 달은 조회할 수 없습니다" style="opacity:0.35; cursor:not-allowed;">▶</button>
-            <?php else: ?>
-                <button type="button" class="calendar-btn" onclick="loadPage('<?php echo $nextPageUrl; ?>', '달력')" title="다음 달">▶</button>
-            <?php endif; ?>
+            <button type="button" class="calendar-btn" onclick="loadPage('<?php echo $nextPageUrl; ?>', '달력')" title="다음 달">▶</button>
             <button type="button" class="calendar-btn today-btn" onclick="loadPage('<?php echo $todayPageUrl; ?>', '달력')">오늘</button>
         </div>
     </div>
@@ -379,10 +420,18 @@ function selectCalendarDate(date) {
     
     // 오늘의 할 일 요약 정보 한 줄로 간결하게 표출 (아이콘 제거 & 마진/패딩 최소화)
     if (tasks && tasks.total > 0) {
+        // 오늘: 완료 + 미완료 / 오늘 이전: 완료 / 오늘 이후: 미완료
+        let parts = [];
+        if (tasks.mode === 'today' || tasks.mode === 'past') {
+            parts.push(`완료 <strong style="color:#2ecc71;">${tasks.completed}</strong>개`);
+        }
+        if (tasks.mode === 'today' || tasks.mode === 'future') {
+            parts.push(`미완료 <strong style="color:#e67e22;">${tasks.incomplete}</strong>개`);
+        }
         summaryContainer.innerHTML = `
             <div class="task-summary-box" onclick="goToDailyTasks('${date}')">
                 <div class="task-summary-text">
-                    오늘의 할 일 : 완료 <strong style="color:#2ecc71;">${tasks.completed}</strong>개
+                    오늘의 할 일 : ${parts.join(' / ')}
                 </div>
             </div>
         `;
