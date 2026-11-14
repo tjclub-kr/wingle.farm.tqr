@@ -67,6 +67,70 @@ function getDefaultFarmIdByName($name) {
     return isset($map[$name]) ? $map[$name] : 1;
 }
 
+// ridge_group_id (UUID v4) 생성 : 한 번의 등록 요청으로 저장되는 모든 이랑 기록이 같은 값을 공유
+if (!function_exists('generateUuidV4')) {
+    function generateUuidV4(): string {
+        $data = random_bytes(16);
+        $data[6] = chr((ord($data[6]) & 0x0f) | 0x40); // version 4
+        $data[8] = chr((ord($data[8]) & 0x3f) | 0x80); // variant
+        return vsprintf('%s%s-%s-%s-%s-%s%s%s', str_split(bin2hex($data), 4));
+    }
+}
+if (!function_exists('isValidUuid')) {
+    function isValidUuid($v): bool {
+        return is_string($v) && preg_match('/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i', $v) === 1;
+    }
+}
+
+// 수확량 입력값 검증/정규화 : 숫자 + 소수점 둘째자리까지 ('' -> null, '12.' -> '12.00', '.5' -> '0.50')
+if (!function_exists('yieldNormalize')) {
+    function yieldNormalize($raw): ?string {
+        $v = trim((string)$raw);
+        if ($v === '') return null;
+        if (!preg_match('/^(\d*)\.?(\d{0,2})$/', $v, $m) || ($m[1] === '' && $m[2] === '')) {
+            throw new InvalidArgumentException('수확량은 숫자(소수점 둘째자리까지)만 입력할 수 있습니다.');
+        }
+        $int = ltrim($m[1], '0');
+        if ($int === '') $int = '0';
+        if (strlen($int) > 8) throw new InvalidArgumentException('수확량 값이 너무 큽니다.');
+        return $int . '.' . str_pad($m[2], 2, '0');
+    }
+}
+
+// yieldTB 저장 : ridge_records 와 같은 ridge_group_id / farm_id 사용, 열(A~D)은 col_num(1~4), 전체는 col_num = 0
+//  - yield_id 는 DB 기본값(uuid())으로 새로 생성
+//  - $replace = true 이면(수정) 같은 ridge_group_id + farm_id 의 기존 행을 지우고 다시 저장
+//  - 입력값이 비어 있는 칸은 저장하지 않음
+if (!function_exists('saveYieldRows')) {
+    function saveYieldRows(PDO $pdo, string $ridgeGroupId, int $farmId, $totalRaw, array $colRaw, array $fCols, bool $replace): int {
+        $rows = [];
+        $t = yieldNormalize($totalRaw);
+        if ($t !== null) $rows[0] = $t;
+        foreach ($fCols as $c) {
+            $colNum = ord(strtoupper($c)) - 64;
+            if ($colNum < 1) continue;
+            $val = yieldNormalize($colRaw[$c] ?? '');
+            if ($val !== null) $rows[$colNum] = $val;
+        }
+
+        if ($replace) {
+            $del = $pdo->prepare("DELETE FROM yieldTB WHERE ridge_group_id = :ridge_group_id AND farm_id = :farm_id");
+            $del->execute([':ridge_group_id' => $ridgeGroupId, ':farm_id' => $farmId]);
+        }
+
+        $ins = $pdo->prepare("INSERT INTO yieldTB (ridge_group_id, farm_id, col_num, `yield`) VALUES (:ridge_group_id, :farm_id, :col_num, :yield)");
+        foreach ($rows as $colNum => $val) {
+            $ins->execute([
+                ':ridge_group_id' => $ridgeGroupId,
+                ':farm_id'        => $farmId,
+                ':col_num'        => $colNum,
+                ':yield'          => $val
+            ]);
+        }
+        return count($rows);
+    }
+}
+
 function getFarmInfo($pdo, $identifier) {
     try {
         if (is_numeric($identifier) && intval($identifier) > 0) {
@@ -179,7 +243,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             $fCols[] = chr(65 + $i);
         }
 
-        $stmt = $pdo->prepare("INSERT INTO ridge_records (farm_id, row_num, col_num, task_id, work_date, created_at, check_status, content) VALUES (:farm_id, :row_num, :col_num, :task_id, :work_date, CONCAT(:work_date_c, ' ', DATE_FORMAT(NOW(), '%H:%i:%s')), :check_status, :content)");
+        // 이번 등록 요청 전체가 공유할 그룹 ID(UUID)와 등록일시를 1회만 생성
+        $ridgeGroupId = generateUuidV4();
+        $nowTime      = $pdo->query("SELECT DATE_FORMAT(NOW(), '%H:%i:%s')")->fetchColumn();
+        $createdAt    = $workDate . ' ' . $nowTime;
+
+        $stmt = $pdo->prepare("INSERT INTO ridge_records (ridge_group_id, farm_id, row_num, col_num, task_id, work_date, created_at, check_status, content) VALUES (:ridge_group_id, :farm_id, :row_num, :col_num, :task_id, :work_date, :created_at, :check_status, :content)");
         
         $totalSavedCount = 0;
         for ($r = 1; $r <= $fCol; $r++) {
@@ -191,12 +260,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 if ($colNum < 1) $colNum = 1;
 
                 $stmt->execute([
+                    ':ridge_group_id' => $ridgeGroupId,
                     ':farm_id' => $postFarmId,
                     ':row_num' => $r,
                     ':col_num' => $colNum,
                     ':task_id' => $taskId,
                     ':work_date' => $workDate,
-                    ':work_date_c' => $workDate,
+                    ':created_at' => $createdAt,
                     ':check_status' => $checkStatus,
                     ':content' => $content
                 ]);
@@ -204,8 +274,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             }
         }
 
+        // 수확 등록 : 전체/A~D 아래 입력값을 yieldTB 에 저장 (같은 ridge_group_id, farm_id)
+        if ($workType === '수확') {
+            saveYieldRows(
+                $pdo, $ridgeGroupId, $postFarmId,
+                $_POST['yield_total'] ?? '',
+                (isset($_POST['yield_col']) && is_array($_POST['yield_col'])) ? $_POST['yield_col'] : [],
+                $fCols, false
+            );
+        }
+
         $pdo->commit();
-        echo json_encode(['success' => true, 'count' => $totalSavedCount]);
+        echo json_encode(['success' => true, 'count' => $totalSavedCount, 'ridge_group_id' => $ridgeGroupId]);
+    } catch (InvalidArgumentException $e) {
+        if ($pdo->inTransaction()) {
+            $pdo->rollBack();
+        }
+        echo json_encode(['success' => false, 'message' => $e->getMessage()]);
     } catch (PDOException $e) {
         if ($pdo->inTransaction()) {
             $pdo->rollBack();
@@ -261,7 +346,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'get_ridge_info') {
         $totalCount = (int)$countStmt->fetchColumn();
         $totalPages = (int)ceil($totalCount / $limit);
 
-        $stmt = $pdo->prepare("SELECT ridge_id, work_date, task_id, check_status, content, created_at, DATE_FORMAT(created_at, '%Y-%m-%d %H:%i') AS created_minute FROM ridge_records WHERE farm_id = :farm_id AND row_num = :row_num AND col_num = :col_num AND (check_status != 'N' OR check_status IS NULL) ORDER BY ridge_id DESC LIMIT {$limit} OFFSET {$offset}");
+        $stmt = $pdo->prepare("SELECT ridge_id, ridge_group_id, work_date, task_id, check_status, content, created_at, DATE_FORMAT(created_at, '%Y-%m-%d %H:%i') AS created_minute FROM ridge_records WHERE farm_id = :farm_id AND row_num = :row_num AND col_num = :col_num AND (check_status != 'N' OR check_status IS NULL) ORDER BY ridge_id DESC LIMIT {$limit} OFFSET {$offset}");
         $stmt->execute([
             ':farm_id' => $ajaxFarmId,
             ':row_num' => $rowNum,
@@ -289,6 +374,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'get_ridge_info') {
                 'work_date' => $r['work_date'],
                 'work_type' => $wType,
                 'task_id' => $r['task_id'],
+                'ridge_group_id' => $r['ridge_group_id'],
                 'created_minute' => !empty($r['created_minute']) ? $r['created_minute'] : date('Y-m-d H:i', strtotime($r['work_date'])),
                 'content' => $displayContent
             ];
@@ -307,15 +393,14 @@ if (isset($_GET['action']) && $_GET['action'] === 'get_ridge_info') {
     exit;
 }
 
-// 4. AJAX: 동일 년월일시분 이랑 상태 정보 조회
+// 4. AJAX: 동일 ridge_group_id 이랑 상태 정보 조회
 if (isset($_GET['action']) && $_GET['action'] === 'get_batch_ridge_info') {
     header('Content-Type: application/json; charset=utf-8');
-    $ajaxFarmId = !empty($_GET['farm_id']) ? intval($_GET['farm_id']) : 0;
-    $taskId = !empty($_GET['task_id']) ? intval($_GET['task_id']) : 0;
-    $createdMinute = !empty($_GET['created_minute']) ? trim($_GET['created_minute']) : '';
+    $ajaxFarmId   = !empty($_GET['farm_id']) ? intval($_GET['farm_id']) : 0;
+    $ridgeGroupId = !empty($_GET['ridge_group_id']) ? trim($_GET['ridge_group_id']) : '';
 
-    if ($ajaxFarmId <= 0 || $taskId <= 0 || empty($createdMinute)) {
-        echo json_encode(['success' => false, 'message' => '파라미터가 부족합니다.']);
+    if ($ajaxFarmId <= 0 || !isValidUuid($ridgeGroupId)) {
+        echo json_encode(['success' => false, 'message' => '파라미터가 부족하거나 올바르지 않습니다.']);
         exit;
     }
 
@@ -324,19 +409,11 @@ if (isset($_GET['action']) && $_GET['action'] === 'get_batch_ridge_info') {
             SELECT row_num, col_num, check_status, content 
             FROM ridge_records 
             WHERE farm_id = :farm_id 
-              AND task_id = :task_id 
-              AND (
-                  DATE_FORMAT(created_at, '%Y-%m-%d %H:%i') = :cm1 
-                  OR (created_at IS NULL AND DATE_FORMAT(work_date, '%Y-%m-%d %H:%i') = :cm2)
-                  OR (created_at IS NULL AND work_date = :cm3)
-              )
+              AND ridge_group_id = :ridge_group_id
         ");
         $stmt->execute([
             ':farm_id' => $ajaxFarmId,
-            ':task_id' => $taskId,
-            ':cm1' => $createdMinute,
-            ':cm2' => $createdMinute,
-            ':cm3' => $createdMinute
+            ':ridge_group_id' => $ridgeGroupId
         ]);
         $records = $stmt->fetchAll();
 
@@ -353,26 +430,34 @@ if (isset($_GET['action']) && $_GET['action'] === 'get_batch_ridge_info') {
             $gridData[$key] = $rec['check_status'];
         }
 
-        echo json_encode(['success' => true, 'data' => $gridData, 'content' => $batchContent]);
+        // 수확량(yieldTB) : 같은 ridge_group_id + farm_id 의 행을 col_num 별로 반환 (0 = 전체)
+        $yields = [];
+        $yStmt = $pdo->prepare("SELECT col_num, `yield` FROM yieldTB WHERE ridge_group_id = :ridge_group_id AND farm_id = :farm_id");
+        $yStmt->execute([':ridge_group_id' => $ridgeGroupId, ':farm_id' => $ajaxFarmId]);
+        foreach ($yStmt->fetchAll() as $y) {
+            $yields[(string)(int)$y['col_num']] = $y['yield'];
+        }
+
+        echo json_encode(['success' => true, 'data' => $gridData, 'content' => $batchContent, 'yields' => $yields]);
     } catch (PDOException $e) {
         echo json_encode(['success' => false, 'message' => '조회 실패']);
     }
     exit;
 }
 
-// 5. AJAX: 동일 년월일시분 이랑 상태 및 작업일자, 내용 일괄 업데이트 (task_id 변경 지원)
+// 5. AJAX: 동일 ridge_group_id 이랑 상태 및 작업일자, 내용 일괄 업데이트 (task_id 변경 지원)
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'update_batch_ridge_status') {
     header('Content-Type: application/json; charset=utf-8');
     
     $postFarmId    = !empty($_POST['farm_id']) ? intval($_POST['farm_id']) : 0;
     $taskId        = !empty($_POST['task_id']) ? intval($_POST['task_id']) : 0;
     $newTaskId     = !empty($_POST['new_task_id']) ? intval($_POST['new_task_id']) : $taskId;
-    $createdMinute = !empty($_POST['created_minute']) ? trim($_POST['created_minute']) : '';
+    $ridgeGroupId  = !empty($_POST['ridge_group_id']) ? trim($_POST['ridge_group_id']) : '';
     $newWorkDate   = !empty($_POST['new_work_date']) ? trim($_POST['new_work_date']) : '';
     $content       = !empty($_POST['content']) ? trim($_POST['content']) : '';
     $ridges        = !empty($_POST['ridges']) && is_array($_POST['ridges']) ? $_POST['ridges'] : [];
 
-    if ($postFarmId <= 0 || $taskId <= 0 || empty($createdMinute)) {
+    if ($postFarmId <= 0 || $taskId <= 0 || !isValidUuid($ridgeGroupId)) {
         echo json_encode(['success' => false, 'message' => '필수 파라미터가 누락되었습니다.']);
         exit;
     }
@@ -405,12 +490,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             UPDATE ridge_records 
             SET {$setClause}
             WHERE farm_id = :farm_id 
-              AND task_id = :task_id 
-              AND (
-                  DATE_FORMAT(created_at, '%Y-%m-%d %H:%i') = :cm1 
-                  OR (created_at IS NULL AND DATE_FORMAT(work_date, '%Y-%m-%d %H:%i') = :cm2)
-                  OR (created_at IS NULL AND work_date = :cm3)
-              )
+              AND ridge_group_id = :ridge_group_id
               AND row_num = :row_num 
               AND col_num = :col_num
         ");
@@ -427,10 +507,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                     ':check_status' => $checkStatus,
                     ':content' => $content,
                     ':farm_id' => $postFarmId,
-                    ':task_id' => $taskId,
-                    ':cm1' => $createdMinute,
-                    ':cm2' => $createdMinute,
-                    ':cm3' => $createdMinute,
+                    ':ridge_group_id' => $ridgeGroupId,
                     ':row_num' => $r,
                     ':col_num' => $colNum
                 ];
@@ -446,8 +523,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             }
         }
 
+        // 수확 수정 : 등록과 같은 방식으로 yieldTB 를 다시 저장 (같은 ridge_group_id, farm_id 기존 행 삭제 후 저장)
+        if ($taskId === (int)($taskMap['수확'] ?? 0) && isset($_POST['yield_total'])) {
+            saveYieldRows(
+                $pdo, $ridgeGroupId, $postFarmId,
+                $_POST['yield_total'],
+                (isset($_POST['yield_col']) && is_array($_POST['yield_col'])) ? $_POST['yield_col'] : [],
+                $fCols, true
+            );
+        }
+
         $pdo->commit();
         echo json_encode(['success' => true]);
+    } catch (InvalidArgumentException $e) {
+        if ($pdo->inTransaction()) {
+            $pdo->rollBack();
+        }
+        echo json_encode(['success' => false, 'message' => $e->getMessage()]);
     } catch (PDOException $e) {
         if ($pdo->inTransaction()) {
             $pdo->rollBack();
@@ -1037,6 +1129,25 @@ $todayDate = date('Y-m-d');
 .status-grid-table td.row-label { background-color: #f1f8e9; font-weight: bold; color: #33691e; width: 18%; cursor: pointer; user-select: none; }
 .status-grid-table input[type="checkbox"] { width: 18px; height: 18px; cursor: pointer; }
 .grid-btn-group { display: flex; justify-content: space-between; align-items: center; margin-top: 4px; }
+/* 물/수확/옆순 상태 입력 팝업(statusGridModal) : 갤럭시 S24·S25·S26 크롬(폭 360px)에서 스크롤 없이
+   [제목 / 작업일자 / 내용 / 헤더 / 수량 입력줄 / 1~10 체크 / 버튼] 이 한 화면에 들어오도록 컴팩트하게 구성 */
+#statusGridModal .grid-modal-content { padding: 10px 12px; gap: 6px; max-height: 100%; overflow-y: auto; }
+#statusGridModal .grid-modal-header { padding-bottom: 4px; }
+#statusGridModal .grid-modal-header h3 { font-size: 0.95rem; }
+#statusGridModal .date-input-row { padding: 3px 8px; font-size: 0.82rem; }
+#statusGridModal .date-input-row input[type="date"] { height: 28px; padding: 1px 6px; font-size: 0.82rem; }
+#statusGridModal .content-input-row { flex-direction: row; align-items: center; gap: 6px; padding: 3px 8px; margin-bottom: 0; font-size: 0.82rem; }
+#statusGridModal .content-input-row label { white-space: nowrap; }
+#statusGridModal .content-input-row textarea { flex: 1; min-width: 0; height: 40px; min-height: 40px; padding: 4px 6px; resize: none; font-size: 0.82rem; }
+#statusGridModal .status-grid-table th, #statusGridModal .status-grid-table td { padding: 6px 2px; font-size: 0.85rem; }
+#statusGridModal .status-grid-table input[type="checkbox"] { width: 18px; height: 18px; margin: 0; vertical-align: middle; }
+#statusGridModal .qty-row td, #historyBatchModal .qty-row td { padding: 3px 1px; background: #fffde7; }
+#statusGridModal .qty-row input, #historyBatchModal .qty-row input { display: block; width: 100%; height: 28px; padding: 1px 3px; border: 1px solid #ccc; border-radius: 4px; font-size: 0.78rem; text-align: right; box-sizing: border-box; outline: none; background: #fff; }
+#statusGridModal .qty-row input:read-only, #historyBatchModal .qty-row input:read-only { background: #e9e9e9; color: #999; cursor: not-allowed; }
+#statusGridModal .qty-row input.qty-manual, #historyBatchModal .qty-row input.qty-manual { border-color: #f9a825; background: #fff8e1; }
+#historyBatchModal .grid-modal-content { max-height: 100%; overflow-y: auto; }
+#statusGridModal .grid-btn-group { margin-top: 0; }
+#statusGridModal .grid-btn-group button { padding: 7px 16px; }
 .btn-grid-save { padding: 8px 16px; background-color: #4CAF50; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: bold; }
 .env-modal-content { max-height: 92vh; overflow-y: auto; gap: 10px; }
 .env-form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 10px; }
@@ -1181,7 +1292,7 @@ $todayDate = date('Y-m-d');
             <span style="cursor:pointer; font-size: 1.2rem;" onclick="closeStatusGridModal()">✖</span>
         </div>
         <div class="date-input-row">
-            <label for="statusWorkDate">📅 작업일자:</label>
+            <label for="statusWorkDate">📅 작업일자..:</label>
             <input type="date" id="statusWorkDate" value="<?php echo $todayDate; ?>" max="<?php echo $todayDate; ?>">
         </div>
         <div class="content-input-row">
@@ -1198,6 +1309,17 @@ $todayDate = date('Y-m-d');
                 </tr>
             </thead>
             <tbody>
+                <!-- 헤더 바로 아래 수량 입력줄 : 수확 팝업에서만 표시 (숫자 + 소수점 둘째자리까지) -->
+                <tr class="qty-row" id="statusQtyRow" style="display:none;">
+                    <td>
+                        <input type="text" id="statusQtyTotal" class="qty-total" inputmode="decimal" autocomplete="off" placeholder="0.00" readonly>
+                    </td>
+                    <?php foreach ($cols as $c): ?>
+                        <td>
+                            <input type="text" class="qty-col-input" data-col="<?php echo $c; ?>" inputmode="decimal" autocomplete="off" placeholder="0.00" readonly>
+                        </td>
+                    <?php endforeach; ?>
+                </tr>
                 <?php for ($r = 1; $r <= $colCount; $r++): ?>
                     <tr>
                         <td class="row-label" onclick="toggleRowCheckboxes('statusGridModal', <?php echo $r; ?>)"><?php echo $r; ?></td>
@@ -1339,6 +1461,17 @@ $todayDate = date('Y-m-d');
                 </tr>
             </thead>
             <tbody>
+                <!-- 헤더 바로 아래 수량 입력줄 : 수확 수정 팝업에서만 표시 (숫자 + 소수점 둘째자리까지) -->
+                <tr class="qty-row" id="historyQtyRow" style="display:none;">
+                    <td>
+                        <input type="text" id="historyQtyTotal" class="qty-total" inputmode="decimal" autocomplete="off" placeholder="0.00" readonly>
+                    </td>
+                    <?php foreach ($cols as $c): ?>
+                        <td>
+                            <input type="text" class="qty-col-input" data-col="<?php echo $c; ?>" inputmode="decimal" autocomplete="off" placeholder="0.00" readonly>
+                        </td>
+                    <?php endforeach; ?>
+                </tr>
                 <?php for ($r = 1; $r <= $colCount; $r++): ?>
                     <tr>
                         <td class="row-label" onclick="toggleRowCheckboxes('historyBatchModal', <?php echo $r; ?>)"><?php echo $r; ?></td>
@@ -1520,12 +1653,15 @@ $todayDate = date('Y-m-d');
 
     var currentBatchTaskId = 0;
     var currentBatchCreatedMinute = '';
+    var currentBatchGroupId = '';
 
     var currentPesticideBatchTaskId = 0;
     var currentPesticideBatchCreatedMinute = '';
+    var currentPesticideBatchGroupId = '';
 
     var currentPestBatchTaskId = 0;
     var currentPestBatchCreatedMinute = '';
+    var currentPestBatchGroupId = '';
 
     var farmId = <?php echo (int)$farmId; ?>;
     var groupId = <?php echo json_encode($groupId, JSON_UNESCAPED_UNICODE); ?>;
@@ -1700,31 +1836,168 @@ $todayDate = date('Y-m-d');
 
     function uncheckAllGrids(modalId) {
         document.querySelectorAll(`#${modalId} .grid-chk`).forEach(el => el.checked = false);
+        if (QTY_MODALS.includes(modalId)) qtyReset(modalId);
     }
     
     function toggleAllGridCheckboxes(modalId) {
         let checkboxes = document.querySelectorAll(`#${modalId} .grid-chk`);
         let allChecked = Array.from(checkboxes).every(cb => cb.checked);
         checkboxes.forEach(cb => cb.checked = !allChecked);
+        if (QTY_MODALS.includes(modalId)) qtyRecalc(modalId);
     }
 
     function toggleRowCheckboxes(modalId, rowNum) {
         let checkboxes = document.querySelectorAll(`#${modalId} .grid-chk.row-${rowNum}`);
         let allChecked = Array.from(checkboxes).every(cb => cb.checked);
         checkboxes.forEach(cb => cb.checked = !allChecked);
+        if (QTY_MODALS.includes(modalId)) qtyRecalc(modalId);
     }
 
     function toggleColCheckboxes(modalId, colChar) {
         let checkboxes = document.querySelectorAll(`#${modalId} .grid-chk.col-${colChar}`);
         let allChecked = Array.from(checkboxes).every(cb => cb.checked);
         checkboxes.forEach(cb => cb.checked = !allChecked);
+        if (QTY_MODALS.includes(modalId)) qtyRecalc(modalId);
     }
+
+
+    // ===== 수확 팝업 : 수량 자동 배분 (전체 / A~D 열) =====
+    // 등록 팝업(statusGridModal)과 수정 팝업(historyBatchModal)이 같은 로직을 공유한다. (modalId 로 구분)
+    // 금액은 소수점 둘째자리까지만 허용하므로 내부 계산은 "100배 한 정수(cents)"로 처리해 부동소수점 오차를 없앤다.
+    var QTY_MODALS = ['statusGridModal', 'historyBatchModal'];
+    var qtyManualMap = {};   // { modalId: { 'A': true, ... } }  수기로 직접 입력한 열
+    function qtyManualOf(modalId) { return qtyManualMap[modalId] || (qtyManualMap[modalId] = {}); }
+
+    function qtySanitize(str) {
+        str = String(str).replace(/[^0-9.]/g, '');
+        const i = str.indexOf('.');
+        if (i !== -1) str = str.slice(0, i + 1) + str.slice(i + 1).replace(/\./g, '').slice(0, 2);
+        return str;
+    }
+    function qtyParse(str) {            // '12.3' -> 1230, '' / '.' -> null
+        if (!str || str === '.') return null;
+        const p = str.split('.');
+        return parseInt(p[0] || '0', 10) * 100 + parseInt(((p[1] || '') + '00').slice(0, 2), 10);
+    }
+    function qtyFormat(cents) {         // 1320 -> '13.2', 2200 -> '22'
+        const i = Math.floor(cents / 100), f = cents % 100;
+        if (f === 0) return String(i);
+        return i + '.' + (f < 10 ? '0' + f : String(f)).replace(/0$/, '');
+    }
+    function qtyInputs(modalId) { return Array.from(document.querySelectorAll(`#${modalId} .qty-col-input`)); }
+    function qtyTotalEl(modalId) { return document.querySelector(`#${modalId} .qty-total`); }
+    function qtyCount(modalId, col) { return document.querySelectorAll(`#${modalId} .grid-chk.col-${col}:checked`).length; }
+
+    // cents 를 weights(열별 체크 개수)에 비례해 배분. 절삭분은 체크박스가 가장 많은 열에 가산.
+    function qtyDistribute(cents, cols, counts) {
+        const sumN = cols.reduce((a, c) => a + counts[c], 0);
+        const out = {};
+        let used = 0, maxCol = cols[0];
+        cols.forEach(c => {
+            out[c] = Math.floor(cents * counts[c] / sumN);
+            used += out[c];
+            if (counts[c] > counts[maxCol]) maxCol = c;
+        });
+        out[maxCol] += cents - used;
+        return out;
+    }
+
+    function qtyReset(modalId) {
+        qtyManualMap[modalId] = {};
+        const t = qtyTotalEl(modalId);
+        if (!t) return;
+        t.value = '';
+        qtyInputs(modalId).forEach(inp => { inp.value = ''; inp.classList.remove('qty-manual'); });
+        qtyRecalc(modalId);
+    }
+
+    function qtyRecalc(modalId) {
+        const totalEl = qtyTotalEl(modalId);
+        if (!totalEl) return;
+        const manual = qtyManualOf(modalId);
+        const inputs = qtyInputs(modalId);
+        const counts = {}, active = [];
+        inputs.forEach(inp => {
+            const c = inp.dataset.col;
+            counts[c] = qtyCount(modalId, c);
+            const on = counts[c] > 0;
+            inp.readOnly = !on;                       // 체크가 1개 이상일 때만 입력 가능
+            if (on) active.push(c);
+            else { inp.value = ''; delete manual[c]; }
+            inp.classList.toggle('qty-manual', !!manual[c]);
+        });
+        totalEl.readOnly = active.length === 0;       // 이랑이 1개 이상 체크되어야 전체 입력 가능
+        if (active.length === 0) { totalEl.value = ''; return; }
+
+        const free = active.filter(c => !manual[c]);
+        const byCol = {};
+        inputs.forEach(inp => byCol[inp.dataset.col] = inp);
+
+        // 모든 (활성) 열을 수기로 입력한 경우 : 합계를 전체 칸에 표시
+        if (free.length === 0) {
+            let sum = 0;
+            active.forEach(c => sum += (qtyParse(byCol[c].value) || 0));
+            totalEl.value = qtyFormat(sum);
+            return;
+        }
+
+        const total = qtyParse(totalEl.value);
+        if (total === null) { free.forEach(c => byCol[c].value = ''); return; }
+
+        // 전체 - 수기 입력 열의 합계 = 수기 입력하지 않은 열에 균등(체크박스 개수 비례) 배분
+        let manualSum = 0;
+        active.forEach(c => { if (manual[c]) manualSum += (qtyParse(byCol[c].value) || 0); });
+        const remain = Math.max(0, total - manualSum);
+        const dist = qtyDistribute(remain, free, counts);
+        free.forEach(c => byCol[c].value = qtyFormat(dist[c]));
+    }
+
+    // 수확 수량(전체 / A~D)을 서버 전송용 파라미터로 추가 : yield_total, yield_col[A] ...
+    function appendYieldParams(formData, modalId) {
+        const t = qtyTotalEl(modalId);
+        formData.append('yield_total', t ? t.value : '');
+        qtyInputs(modalId).forEach(inp => formData.append(`yield_col[${inp.dataset.col}]`, inp.value));
+    }
+
+    function qtyInit(modalId) {
+        const modal = document.getElementById(modalId);
+        if (!modal || modal.dataset.qtyBound) return;
+        modal.dataset.qtyBound = '1';
+
+        // 전체 입력 : 수기 입력 상태를 초기화하고 처음부터 다시 배분
+        qtyTotalEl(modalId).addEventListener('input', function () {
+            if (this.readOnly) return;
+            this.value = qtySanitize(this.value);
+            qtyManualMap[modalId] = {};
+            if (this.value === '') qtyInputs(modalId).forEach(inp => inp.value = '');
+            qtyRecalc(modalId);
+        });
+
+        // 열 입력 : 수기 입력으로 표시(비우면 자동 배분으로 복귀)하고 나머지 열에 재배분
+        qtyInputs(modalId).forEach(inp => inp.addEventListener('input', function () {
+            if (this.readOnly) return;
+            this.value = qtySanitize(this.value);
+            const manual = qtyManualOf(modalId);
+            if (this.value === '') delete manual[this.dataset.col];
+            else manual[this.dataset.col] = true;
+            qtyRecalc(modalId);
+        }));
+
+        // 체크박스 직접 클릭
+        modal.addEventListener('change', function (e) {
+            if (e.target.classList && e.target.classList.contains('grid-chk')) qtyRecalc(modalId);
+        });
+    }
+    QTY_MODALS.forEach(qtyInit);
 
     function openStatusGridModal(type) {
         currentStatusType = type;
         uncheckAllGrids('statusGridModal');
         document.getElementById('statusWorkDate').value = getTodayString();
         document.getElementById('statusContent').value = '';
+        // 헤더 아래 숫자 입력줄은 수확 팝업에서만 표시
+        qtyReset('statusGridModal');
+        document.getElementById('statusQtyRow').style.display = (type === '수확') ? 'table-row' : 'none';
         document.getElementById('gridModalTitle').innerText = `${type} 상태 입력`;
         document.getElementById('statusGridModal').style.display = 'flex';
     }
@@ -1797,6 +2070,7 @@ $todayDate = date('Y-m-d');
         formData.append('work_date', workDate);
         formData.append('content', contentVal);
         ridgeList.forEach(r => formData.append('ridges[]', r));
+        if (gridType === 'normal' && workType === '수확') appendYieldParams(formData, modalId);
 
         fetch('farmmngdtl.php', {
             method: 'POST',
@@ -1936,7 +2210,7 @@ $todayDate = date('Y-m-d');
             li.className = 'ridge-info-item';
             
             li.onclick = function() {
-                openBatchModalByTask(item.task_id, item.created_minute, item.work_type);
+                openBatchModalByTask(item.task_id, item.created_minute, item.work_type, item.ridge_group_id);
             };
 
             li.innerHTML = `
@@ -1973,28 +2247,31 @@ $todayDate = date('Y-m-d');
         pagination.appendChild(nextBtn);
     }
 
-    function openBatchModalByTask(taskId, createdMinute, workType) {
+    function openBatchModalByTask(taskId, createdMinute, workType, ridgeGroupId) {
         const pesticideTasks = [40, 41, 42, 43, 44, 45, 46];
         const pestTasks = [70, 71, 72]; // 영양제 (1군/2군/3군)
 
         if (pesticideTasks.includes(Number(taskId))) {
-            openPesticideHistoryBatchModal(taskId, createdMinute, workType);
+            openPesticideHistoryBatchModal(taskId, createdMinute, workType, ridgeGroupId);
         } else if (pestTasks.includes(Number(taskId))) {
-            openPestHistoryBatchModal(taskId, createdMinute, workType);
+            openPestHistoryBatchModal(taskId, createdMinute, workType, ridgeGroupId);
         } else {
-            openNormalHistoryBatchModal(taskId, createdMinute, workType);
+            openNormalHistoryBatchModal(taskId, createdMinute, workType, ridgeGroupId);
         }
     }
 
-    function openNormalHistoryBatchModal(taskId, createdMinute, workType) {
+    function openNormalHistoryBatchModal(taskId, createdMinute, workType, ridgeGroupId) {
         currentBatchTaskId = taskId;
         currentBatchCreatedMinute = createdMinute;
+        currentBatchGroupId = ridgeGroupId;
 
         uncheckAllGrids('historyBatchModal');
+        // 수량 입력줄은 수확 수정 팝업에서만 표시
+        document.getElementById('historyQtyRow').style.display = (workType === '수확') ? 'table-row' : 'none';
         document.getElementById('historyBatchTitle').innerText = `${workType} (${createdMinute}) 이랑 상태 수정`;
         document.getElementById('historyBatchDate').value = createdMinute.substring(0, 10);
         
-        fetch(`${memoAjaxUrl}?action=get_batch_ridge_info&farm_id=${farmId}&task_id=${taskId}&created_minute=${encodeURIComponent(createdMinute)}`)
+        fetch(`${memoAjaxUrl}?action=get_batch_ridge_info&farm_id=${farmId}&ridge_group_id=${encodeURIComponent(ridgeGroupId)}`)
         .then(res => res.json())
         .then(res => {
             if (res.success) {
@@ -2005,6 +2282,20 @@ $todayDate = date('Y-m-d');
                         if (chk) chk.checked = true;
                     }
                 }
+                // yieldTB 값 표시 : col_num 0 = 전체, 1~ = A~ 열 (열 값은 수기 입력으로 취급해 저장된 값 그대로 유지)
+                if (workType === '수확' && res.yields) {
+                    const tEl = qtyTotalEl('historyBatchModal');
+                    const manual = qtyManualOf('historyBatchModal');
+                    const fmt = v => (v === null || v === undefined || v === '') ? '' : qtyFormat(qtyParse(String(v)) || 0);
+                    tEl.value = fmt(res.yields['0']);
+                    qtyInputs('historyBatchModal').forEach(inp => {
+                        const colNum = inp.dataset.col.toUpperCase().charCodeAt(0) - 64;
+                        const v = fmt(res.yields[String(colNum)]);
+                        inp.value = v;
+                        if (v !== '') manual[inp.dataset.col] = true;
+                    });
+                }
+                qtyRecalc('historyBatchModal');   // 체크 상태에 맞게 수량 입력칸 활성화
             }
             document.getElementById('historyBatchModal').style.display = 'flex';
         });
@@ -2015,19 +2306,20 @@ $todayDate = date('Y-m-d');
     }
 
     function saveHistoryBatchGrid() {
-        saveBatchGridCommon('historyBatchModal', currentBatchTaskId, currentBatchCreatedMinute, 'historyBatchDate', 'historyBatchContent', closeHistoryBatchModal);
+        saveBatchGridCommon('historyBatchModal', currentBatchTaskId, currentBatchGroupId, 'historyBatchDate', 'historyBatchContent', closeHistoryBatchModal);
     }
 
-    function openPesticideHistoryBatchModal(taskId, createdMinute, workType) {
+    function openPesticideHistoryBatchModal(taskId, createdMinute, workType, ridgeGroupId) {
         currentPesticideBatchTaskId = taskId;
         currentPesticideBatchCreatedMinute = createdMinute;
+        currentPesticideBatchGroupId = ridgeGroupId;
 
         uncheckAllGrids('pesticideHistoryBatchModal');
         document.getElementById('pesticideHistoryBatchTitle').innerText = `농약 이랑 상태 수정`;
         document.getElementById('pesticideHistorySelect').value = workType;
         document.getElementById('pesticideHistoryBatchDate').value = createdMinute.substring(0, 10);
 
-        fetch(`${memoAjaxUrl}?action=get_batch_ridge_info&farm_id=${farmId}&task_id=${taskId}&created_minute=${encodeURIComponent(createdMinute)}`)
+        fetch(`${memoAjaxUrl}?action=get_batch_ridge_info&farm_id=${farmId}&ridge_group_id=${encodeURIComponent(ridgeGroupId)}`)
         .then(res => res.json())
         .then(res => {
             if (res.success) {
@@ -2053,19 +2345,20 @@ $todayDate = date('Y-m-d');
             '가군1': 40, '가군3': 41, '나군3': 42, '가군5': 43, '나군5': 44, '가군7': 45, '나군7': 46
         };
         const newTaskId = pesticideTaskMap[selectedWorkType] || currentPesticideBatchTaskId;
-        saveBatchGridCommon('pesticideHistoryBatchModal', currentPesticideBatchTaskId, currentPesticideBatchCreatedMinute, 'pesticideHistoryBatchDate', 'pesticideHistoryBatchContent', closePesticideHistoryBatchModal, newTaskId);
+        saveBatchGridCommon('pesticideHistoryBatchModal', currentPesticideBatchTaskId, currentPesticideBatchGroupId, 'pesticideHistoryBatchDate', 'pesticideHistoryBatchContent', closePesticideHistoryBatchModal, newTaskId);
     }
 
-    function openPestHistoryBatchModal(taskId, createdMinute, workType) {
+    function openPestHistoryBatchModal(taskId, createdMinute, workType, ridgeGroupId) {
         currentPestBatchTaskId = taskId;
         currentPestBatchCreatedMinute = createdMinute;
+        currentPestBatchGroupId = ridgeGroupId;
 
         uncheckAllGrids('pestHistoryBatchModal');
         document.getElementById('pestHistoryBatchTitle').innerText = `영양제 이랑 상태 수정`;
         document.getElementById('pestHistorySelect').value = workType;
         document.getElementById('pestHistoryBatchDate').value = createdMinute.substring(0, 10);
 
-        fetch(`${memoAjaxUrl}?action=get_batch_ridge_info&farm_id=${farmId}&task_id=${taskId}&created_minute=${encodeURIComponent(createdMinute)}`)
+        fetch(`${memoAjaxUrl}?action=get_batch_ridge_info&farm_id=${farmId}&ridge_group_id=${encodeURIComponent(ridgeGroupId)}`)
         .then(res => res.json())
         .then(res => {
             if (res.success) {
@@ -2089,10 +2382,10 @@ $todayDate = date('Y-m-d');
         const selectedWorkType = document.getElementById('pestHistorySelect').value;
         const pestTaskMap = { '1군': 70, '2군': 71, '3군': 72 };
         const newTaskId = pestTaskMap[selectedWorkType] || currentPestBatchTaskId;
-        saveBatchGridCommon('pestHistoryBatchModal', currentPestBatchTaskId, currentPestBatchCreatedMinute, 'pestHistoryBatchDate', 'pestHistoryBatchContent', closePestHistoryBatchModal, newTaskId);
+        saveBatchGridCommon('pestHistoryBatchModal', currentPestBatchTaskId, currentPestBatchGroupId, 'pestHistoryBatchDate', 'pestHistoryBatchContent', closePestHistoryBatchModal, newTaskId);
     }
 
-    function saveBatchGridCommon(modalId, taskId, createdMinute, dateInputId, contentInputId, closeCallback, newTaskId) {
+    function saveBatchGridCommon(modalId, taskId, ridgeGroupId, dateInputId, contentInputId, closeCallback, newTaskId) {
         const newWorkDate = document.getElementById(dateInputId).value;
         const contentVal = document.getElementById(contentInputId).value;
 
@@ -2113,10 +2406,13 @@ $todayDate = date('Y-m-d');
         if (newTaskId && newTaskId !== taskId) {
             formData.append('new_task_id', newTaskId);
         }
-        formData.append('created_minute', createdMinute);
+        formData.append('ridge_group_id', ridgeGroupId);
         formData.append('new_work_date', newWorkDate);
         formData.append('content', contentVal);
         ridgeList.forEach(r => formData.append('ridges[]', r));
+        if (modalId === 'historyBatchModal' && document.getElementById('historyQtyRow').style.display !== 'none') {
+            appendYieldParams(formData, modalId);
+        }
 
         fetch('farmmngdtl.php', {
             method: 'POST',

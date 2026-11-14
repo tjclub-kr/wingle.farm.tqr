@@ -37,6 +37,8 @@ if ($month < 1 || $month > 12) {$month = (int)date('n');
 
 // 오늘 이후 월도 자유롭게 이동 가능 (월 제한 없음)
 $nowInSeoul = new DateTime('now', $calendarTimezone);
+// 내일 날짜 (오늘 이후 작업은 체크 여부와 상관없이 조회하기 위한 기준일)
+$tomorrowYmd = (clone $nowInSeoul)->modify('+1 day')->format('Y-m-d');
 
 /* --------------------------------------------------
  * 이벤트 데이터 조회 (밭 작업 기록: $sql)
@@ -63,7 +65,7 @@ $sql = "
 		ON r.farm_id = f.farm_id
 	WHERE r.work_date >= :start_date
 	  AND r.work_date < :end_date
-	  AND r.check_status = 'Y'
+	  AND (r.check_status = 'Y' OR r.work_date >= :tomorrow)
 	  AND f.use_yn = 'Y'
 	GROUP BY
 		r.farm_id,
@@ -83,7 +85,8 @@ $sql = "
 try {
     $stmt =$pdo->prepare($sql);$stmt->execute([
         'start_date' => $startDate,
-        'end_date'   => $endDate
+        'end_date'   => $endDate,
+        'tomorrow'   => $tomorrowYmd
     ]);
     $rows =$stmt->fetchAll();
 

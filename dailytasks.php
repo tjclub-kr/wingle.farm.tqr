@@ -69,6 +69,10 @@ if ($action) {
             $content = trim($_POST['content'] ?? '');
             if ($content === '') throw new RuntimeException('할일 내용을 입력해 주세요.');
 
+            // 신규 등록은 항상 미완료('') 로만 등록 가능 : 진행중 등 상태값을 직접 지정해서 등록할 수 없음
+            $reqStatus = trim($_POST['completion_status'] ?? ($_POST['status'] ?? ''));
+            if ($reqStatus !== '') throw new RuntimeException('신규 등록 시에는 진행중으로 등록할 수 없습니다.');
+
             // 등록일자는 선택 입력 : 비어 있으면 NULL, 입력하면 오늘 이전은 등록 불가
             if ($task_date === '') {
                 $task_date = null;
@@ -169,6 +173,21 @@ if ($action) {
         }
         exit;
     }
+    if ($action === 'set_progress') {
+        // 진행중 처리 : 미완료('' / NULL) 상태의 할일만 진행중으로 변경 (등록일자는 그대로 유지)
+        try {
+            $id = (int)($_POST['id'] ?? 0);
+            if (!$id) throw new RuntimeException('할일을 찾을 수 없습니다.');
+            $stmt = $pdo->prepare("UPDATE dailytasksT SET completion_status = '진행중' WHERE id = ? AND (completion_status IS NULL OR completion_status = '')");
+            $stmt->execute([$id]);
+            if ($stmt->rowCount() === 0) throw new RuntimeException('미완료 상태의 할일만 진행중으로 변경할 수 있습니다.');
+            echo "success";
+        } catch (Throwable $e) {
+            http_response_code(400);
+            echo $e->getMessage();
+        }
+        exit;
+    }
     if ($action === 'undo_complete') {
         $id = $_POST['id'] ?? 0;
         if ($id) {
@@ -216,8 +235,8 @@ if ($action) {
 }
 
 // 현재 조회 중인 날짜($viewDate) 기준으로 요약 통계 재계산
-// 향후 미완료 할일 건수 재계산 (completion_status가 NULL 또는 빈 값인 경우)
-$stmt = $pdo->prepare("SELECT COUNT(*) FROM dailytasksT WHERE task_date > ? AND (completion_status IS NULL OR completion_status = '')");
+// 향후 미완료/진행중 할일 건수 재계산 (completion_status가 NULL, 빈 값, '진행중'인 경우)
+$stmt = $pdo->prepare("SELECT COUNT(*) FROM dailytasksT WHERE task_date > ? AND (completion_status IS NULL OR completion_status = '' OR completion_status = '진행중')");
 $stmt->execute([$viewDate]);
 $futureTotalCount = $stmt->fetchColumn();
 
@@ -229,8 +248,9 @@ $futureTotalCount = $stmt->fetchColumn();
 //  - 중요도(sort_order) : 1 상, 2 중, 3 하 / 1~3 이 아닌 값(이전에 등록된 순번 등)은 3(하) 으로 취급
 //  - 정렬 : 중요도 상 → 중 → 하,  같은 중요도는 등록일시(created_at) 빠른 순 → id.  순번(seq)은 조회된 순서대로 SQL 에서 부여
 $importanceSql = "(CASE WHEN t.sort_order BETWEEN 1 AND 3 THEN t.sort_order ELSE 3 END)";
-$statusAny  = "(t.completion_status IS NULL OR t.completion_status = '' OR t.completion_status = '완료')";
-$statusOpen = "(t.completion_status IS NULL OR t.completion_status = '')";
+// 상태 : 미완료('' / NULL), 진행중, 완료  /  statusOpen = 아직 끝나지 않은 할일(미완료 + 진행중) → 날짜가 지나도 오늘로 넘어옴
+$statusAny  = "(t.completion_status IS NULL OR t.completion_status = '' OR t.completion_status IN ('진행중', '완료'))";
+$statusOpen = "(t.completion_status IS NULL OR t.completion_status = '' OR t.completion_status = '진행중')";
 if ($dateStatus < 0) {
     // 이전 날짜 : 그 날짜에 완료한 할일
     $whereSql   = "(t.task_date = ? AND t.completion_status = '완료')";
@@ -253,8 +273,8 @@ $stmt = $pdo->prepare("SELECT t.*, $importanceSql AS importance,
 $stmt->execute($listParams);
 $tasks = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-// 향후 미완료 할일 목록 재계산 (completion_status가 NULL 또는 빈 값인 경우)
-$stmt = $pdo->prepare("SELECT * FROM dailytasksT WHERE task_date > ? AND (completion_status IS NULL OR completion_status = '') ORDER BY task_date ASC, id DESC");
+// 향후 미완료/진행중 할일 목록 재계산 (completion_status가 NULL, 빈 값, '진행중'인 경우)
+$stmt = $pdo->prepare("SELECT * FROM dailytasksT WHERE task_date > ? AND (completion_status IS NULL OR completion_status = '' OR completion_status = '진행중') ORDER BY task_date ASC, id DESC");
 $stmt->execute([$viewDate]);
 $futureTasks = $stmt->fetchAll(PDO::FETCH_ASSOC);
 ?>
@@ -293,6 +313,7 @@ $futureTasks = $stmt->fetchAll(PDO::FETCH_ASSOC);
     .status-completed { color: #2ecc71; }
     .status-transfer { color: #f39c12; }
     .status-incomplete { color: #e74c3c; }
+    .status-progress { color: #16a085; }
     .detail-modal-overlay, .date-picker-overlay { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.6); z-index: 9998; justify-content: center; align-items: center; }
     .date-picker-overlay { z-index: 9999; } 
     .detail-modal-content { background: #fff; width: 90%; max-width: 360px; padding: 20px; border-radius: 12px; box-shadow: 0 5px 15px rgba(0,0,0,0.3); }
@@ -301,6 +322,7 @@ $futureTasks = $stmt->fetchAll(PDO::FETCH_ASSOC);
     .modal-btn { padding: 10px 14px; border: none; border-radius: 6px; font-size: 14px; font-weight: bold; cursor: pointer; color: #fff; }
     .btn-edit { background-color: #3498db; }
     .btn-complete { background-color: #2ecc71; }
+    .btn-progress { background-color: #16a085; }
     .btn-changedate { background-color: #f39c12; }
     .btn-undo { background-color: #e67e22; }
     .btn-close { background-color: #95a5a6; }
@@ -339,7 +361,8 @@ $futureTasks = $stmt->fetchAll(PDO::FETCH_ASSOC);
             $importanceLabel = [1 => '상', 2 => '중', 3 => '하'][$importance] ?? '하';
             $status = $task['completion_status'];
             $isCompleted = ($status === '완료');
-            $isChanged = ($status !== '' && $status !== null &&$status !== '완료');
+            $isProgress = ($status === '진행중');
+            $isChanged = ($status !== '' && $status !== null && $status !== '완료' && $status !== '진행중');
             $isDoneAny = ($isCompleted || $isChanged);$canDelete = ($dateStatus >= 0 && !$isDoneAny);
         ?>
             <li class="task-item">
@@ -360,6 +383,8 @@ $futureTasks = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
                     <?php if ($isCompleted): ?>
                         <span class="task-status-tag status-completed">[완료]</span>
+                    <?php elseif ($isProgress): ?>
+                        <span class="task-status-tag status-progress">[진행중]</span>
                     <?php elseif ($isChanged): ?>
                         <span class="task-status-tag status-transfer">[이관 : <?= htmlspecialchars($status) ?>]</span>
                     <?php elseif ($dateStatus <= 0): ?>
@@ -423,6 +448,7 @@ $futureTasks = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
         <div class="modal-btn-group">
             <button class="modal-btn btn-edit" id="btnEdit" onclick="updateTaskContent()">수정</button>
+            <button class="modal-btn btn-progress" id="btnProgress" onclick="setTaskProgress()">진행중</button>
             <button class="modal-btn btn-complete" id="btnComplete" onclick="setTaskComplete()">완료</button>
             <button class="modal-btn btn-changedate" id="btnChangeDate" onclick="openDatePicker()">날짜변경</button>
             <button class="modal-btn btn-undo" id="btnUndo" onclick="undoTaskComplete()">완료취소</button>
@@ -508,12 +534,14 @@ $futureTasks = $stmt->fetchAll(PDO::FETCH_ASSOC);
         
         const btnEdit = document.getElementById('btnEdit');
         const btnComplete = document.getElementById('btnComplete');
+        const btnProgress = document.getElementById('btnProgress');
         const btnChangeDate = document.getElementById('btnChangeDate');
         const btnUndo = document.getElementById('btnUndo');
         const textarea = document.getElementById('modal-task-content');
         
         btnEdit.style.display = 'none';
         btnComplete.style.display = 'none';
+        btnProgress.style.display = 'none';
         btnChangeDate.style.display = 'none';
         btnUndo.style.display = 'none';
         textarea.removeAttribute('readonly');
@@ -528,6 +556,8 @@ $futureTasks = $stmt->fetchAll(PDO::FETCH_ASSOC);
                 btnChangeDate.style.display = 'block';
             } else {
                 btnEdit.style.display = 'block';
+                // 이미 진행중인 할일에는 진행중 버튼을 보여주지 않음
+                if (status !== '진행중') btnProgress.style.display = 'block';
                 btnComplete.style.display = 'block';
                 btnChangeDate.style.display = 'block';
             }
@@ -767,6 +797,22 @@ $futureTasks = $stmt->fetchAll(PDO::FETCH_ASSOC);
         .then(res => res.text()).then(data => {
             if (data.trim() === 'success') { closeTaskDetail(); refreshCurrentView(getCurrentViewDate()); }
         });
+    }
+
+    function setTaskProgress() {
+        const id = document.getElementById('modal-task-id').value;
+        const formData = new FormData();
+        formData.append('id', id);
+        fetch('dailytasks.php?action=set_progress', { method: 'POST', body: formData })
+        .then(async res => {
+            const text = await res.text();
+            if (!res.ok) throw new Error(text);
+            return text;
+        })
+        .then(data => {
+            if (data.trim() === 'success') { closeTaskDetail(); refreshCurrentView(getCurrentViewDate()); }
+        })
+        .catch(err => alert(err.message || '진행중 변경 중 오류가 발생했어.'));
     }
 
     function undoTaskComplete() {
