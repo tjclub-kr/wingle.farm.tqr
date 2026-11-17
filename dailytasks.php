@@ -246,8 +246,12 @@ $futureTotalCount = $stmt->fetchColumn();
 //                    + 등록일자가 오늘 이전인 미완료 할일(처리하지 못하고 넘어온 할일)
 //  - 오늘 이후 날짜 : 등록일자가 해당 날짜인 할일
 //  - 중요도(sort_order) : 1 상, 2 중, 3 하 / 1~3 이 아닌 값(이전에 등록된 순번 등)은 3(하) 으로 취급
-//  - 정렬 : 중요도 상 → 중 → 하,  같은 중요도는 등록일시(created_at) 빠른 순 → id.  순번(seq)은 조회된 순서대로 SQL 에서 부여
+//  - 정렬 : 미완료(상·중·하) → 진행중(상·중·하) → 완료(상·중·하)
+//           같은 상태·같은 중요도는 등록일시(created_at) 빠른 순 → id
+//  - 순번(seq) : 미완료·진행중 에만 조회된 순서대로 SQL 에서 1, 2, 3 ... 부여 (완료는 순번 없음)
 $importanceSql = "(CASE WHEN t.sort_order BETWEEN 1 AND 3 THEN t.sort_order ELSE 3 END)";
+$statusRankSql = "(CASE WHEN t.completion_status = '완료' THEN 2 WHEN t.completion_status = '진행중' THEN 1 ELSE 0 END)";   // 0 미완료, 1 진행중, 2 완료
+$orderSql      = "$statusRankSql ASC, $importanceSql ASC, t.created_at ASC, t.id ASC";
 // 상태 : 미완료('' / NULL), 진행중, 완료  /  statusOpen = 아직 끝나지 않은 할일(미완료 + 진행중) → 날짜가 지나도 오늘로 넘어옴
 $statusAny  = "(t.completion_status IS NULL OR t.completion_status = '' OR t.completion_status IN ('진행중', '완료'))";
 $statusOpen = "(t.completion_status IS NULL OR t.completion_status = '' OR t.completion_status = '진행중')";
@@ -265,11 +269,11 @@ if ($dateStatus < 0) {
     $listParams = [$viewDate];
 }
 $stmt = $pdo->prepare("SELECT t.*, $importanceSql AS importance,
-        ROW_NUMBER() OVER (ORDER BY $importanceSql ASC, t.created_at ASC, t.id ASC) AS seq,
+        ROW_NUMBER() OVER (PARTITION BY (CASE WHEN t.completion_status = '완료' THEN 1 ELSE 0 END) ORDER BY $orderSql) AS seq,
         (SELECT COUNT(*) FROM attachment a WHERE a.att_grp_id = -t.id AND a.status='ACTIVE') AS attachment_count
     FROM dailytasksT t
     WHERE $whereSql
-    ORDER BY $importanceSql ASC, t.created_at ASC, t.id ASC");
+    ORDER BY $orderSql");
 $stmt->execute($listParams);
 $tasks = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
@@ -287,6 +291,9 @@ $futureTasks = $stmt->fetchAll(PDO::FETCH_ASSOC);
     .today-badge { position: absolute; left: 100%; margin-left: 8px; font-size: 14px; color: #e74c3c; white-space: nowrap; }
     .task-list { list-style: none; padding: 0; margin: 0; }
     .task-item { display: flex; justify-content: space-between; align-items: center; background: #fff; padding: 15px 0 15px 1px; margin-bottom: 10px; border-radius: 8px; box-shadow: 0 1px 4px rgba(0,0,0,0.05); border: 1px solid #eee; }
+    /* 미완료·진행중 목록과 완료 목록을 구분하는 눈에 띄는 선 */
+    .task-divider { height: 0; margin: 16px 0 18px; border: 0; border-top: 6px solid #2ecc71; border-radius: 3px; list-style: none; }   /* 진행중 ↔ 완료 */
+    .task-divider.divider-progress { border-top: 3px solid #f39c12; }   /* 미완료 ↔ 진행중 (다른 색, 완료 구분선의 절반 두께) */
     .task-imp { flex-shrink: 0; min-width: 22px; margin-right: 6px; padding: 1px 4px; border-radius: 4px; text-align: center; font-size: 12px; font-weight: bold; color: #fff; }
     .task-imp.imp-1 { background: #e74c3c; }
     .task-imp.imp-2 { background: #f39c12; }
@@ -308,7 +315,9 @@ $futureTasks = $stmt->fetchAll(PDO::FETCH_ASSOC);
     .selected-file-badge-name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:200px; }
     .selected-file-badge-remove { margin-left:6px; cursor:pointer; color:#d32f2f; font-weight:bold; }
     .attachment-help { font-size:10px; color:#888; margin-top:5px; line-height:1.4; }
-    .task-delete-btn { background: none; border: none; color: #e74c3c; font-size: 18px; cursor: pointer; padding: 5px 0 5px 5px; margin: 0 3px 0 0; }
+    .task-delete-btn, .task-delete-placeholder { flex-shrink: 0; box-sizing: border-box; width: 28px; margin: 0 3px 0 0; padding: 5px 0; text-align: center; }
+    .task-delete-btn { background: none; border: none; color: #e74c3c; font-size: 18px; cursor: pointer; }
+    .task-delete-placeholder { display: inline-block; font-size: 18px; visibility: hidden; } /* 휴지통이 없어도 같은 자리를 차지 → 상태 글자 위치 고정 */
     .task-status-tag { font-weight: bold; font-size: 14px; white-space: nowrap; }
     .status-completed { color: #2ecc71; }
     .status-transfer { color: #f39c12; }
@@ -356,6 +365,7 @@ $futureTasks = $stmt->fetchAll(PDO::FETCH_ASSOC);
     <?php if (count($tasks) === 0): ?>
         <li style="text-align: center; color: #999; padding: 20px;">할일이 없어! 새 할일을 추가해 볼까?</li>
     <?php else: ?>
+        <?php $progressStarted = false; $completedStarted = false; ?>
         <?php foreach ($tasks as $idx => $task): 
             $importance = (int)$task['importance'];       // 1 상, 2 중, 3 하
             $importanceLabel = [1 => '상', 2 => '중', 3 => '하'][$importance] ?? '하';
@@ -365,8 +375,20 @@ $futureTasks = $stmt->fetchAll(PDO::FETCH_ASSOC);
             $isChanged = ($status !== '' && $status !== null && $status !== '완료' && $status !== '진행중');
             $isDoneAny = ($isCompleted || $isChanged);$canDelete = ($dateStatus >= 0 && !$isDoneAny);
         ?>
+            <?php if ($isProgress && !$progressStarted): ?>
+                <?php if ($idx > 0): /* 앞에 미완료 항목이 있을 때만 구분선 표시 */ ?>
+                    <li class="task-divider divider-progress" role="separator" aria-label="진행중 항목 시작"></li>
+                <?php endif; ?>
+                <?php $progressStarted = true; ?>
+            <?php endif; ?>
+            <?php if ($isCompleted && !$completedStarted): ?>
+                <?php if ($idx > 0): /* 앞에 미완료·진행중 항목이 있을 때만 구분선 표시 */ ?>
+                    <li class="task-divider" role="separator" aria-label="완료 항목 시작"></li>
+                <?php endif; ?>
+                <?php $completedStarted = true; ?>
+            <?php endif; ?>
             <li class="task-item">
-                <span class="task-seq"><?= (int)$task['seq'] ?>.</span>
+                <span class="task-seq"><?= $isCompleted ? '' : ((int)$task['seq'] . '.') ?></span><?php /* 완료는 순번 없이 빈 칸(같은 들여쓰기 유지) */ ?>
                 <span class="task-imp imp-<?= $importance ?>" title="중요도"><?= $importanceLabel ?></span>
                 <div class="task-content-line <?= $isDoneAny ? 'completed' : '' ?>" 
                      data-id="<?= $task['id'] ?>" 
@@ -393,6 +415,8 @@ $futureTasks = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
                     <?php if ($canDelete): ?>
                         <button class="task-delete-btn" onclick="deleteDailyTask(<?= $task['id'] ?>)">🗑️</button>
+                    <?php else: ?>
+                        <span class="task-delete-placeholder" aria-hidden="true">🗑️</span>
                     <?php endif; ?>
                 </div>
             </li>

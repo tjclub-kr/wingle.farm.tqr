@@ -113,6 +113,7 @@ window.TODO_ATTACHMENT_EXTENSIONS = ['jpg','jpeg','png','gif','webp','pdf','txt'
             <li><a href="#" onclick="loadPage('outbound.php', '출고 관리'); return false;">출고</a></li>
             <li><a href="#" onclick="loadPage('calendar.php', '달력'); return false;">달력</a></li>
             <li><a href="#" onclick="loadPage('farmSet.php', '밭 설정'); return false;">밭 설정</a></li>
+			<li><a href="#" onclick="loadPage('commonmng.php','공통코드'); return false;">공통코드</a></li>
 <!--            <li><a href="#" onclick="loadPage('parsing.php', '분석'); return false;">분석</a></li> -->
 <!--            <li><a href="#" onclick="loadPage('environment_monitoring.php', '환경정보'); return false;">환경정보</a></li> -->
             <!-- li><a href="#" onclick="loadPage('dataClear.php', '데이터클리어'); return false;">데이터클리어</a></li -->
@@ -342,7 +343,44 @@ window.TODO_ATTACHMENT_EXTENSIONS = ['jpg','jpeg','png','gif','webp','pdf','txt'
     }
 
     // AJAX로 동적 페이지 로드
+    // ------------------------------------------------------------
+    // 달력 화면 방향 처리
+    //  - 세로 화면 : calendar.php  (월간)
+    //  - 가로 화면 : calendarH.php (14일간)
+    // 휴대폰 가로 화면 = 가로가 더 길고, 높이가 500px 이하인 화면
+    // (index.php 의 CSS 미디어쿼리와 같은 조건)
+    // ------------------------------------------------------------
+    const LANDSCAPE_QUERY = '(orientation: landscape) and (max-height: 500px)';
+
+    function isLandscapeMode() {
+        return window.matchMedia(LANDSCAPE_QUERY).matches;
+    }
+
+    // calendar.php / calendarH.php 요청을 현재 화면 방향에 맞는 파일로 바꿔 줌
+    function resolveCalendarUrl(pageUrl) {
+        const m = String(pageUrl).match(/^calendar(H)?\.php(\?.*)?$/i);
+        if (!m) return pageUrl;
+        const wantLandscape = isLandscapeMode();
+        const isLandscapePage = !!m[1];
+        if (wantLandscape === isLandscapePage) return pageUrl;
+        // 방향이 다르면 파라미터(year/month ↔ base)가 호환되지 않으므로 기본(오늘) 화면으로 이동
+        return wantLandscape ? 'calendarH.php' : 'calendar.php';
+    }
+
+    // 화면을 돌리면 달력을 보고 있을 때만 자동으로 해당 방향의 달력으로 다시 불러옴
+    (function watchOrientation() {
+        const mql = window.matchMedia(LANDSCAPE_QUERY);
+        const onChange = function() {
+            if (!/^calendar(H)?\.php/i.test(currentPageUrl)) return;
+            const resolved = resolveCalendarUrl(currentPageUrl);
+            if (resolved !== currentPageUrl) loadPage(resolved, '달력');
+        };
+        if (mql.addEventListener) mql.addEventListener('change', onChange);
+        else if (mql.addListener) mql.addListener(onChange);
+    })();
+
     function loadPage(pageUrl, title) {
+        pageUrl = resolveCalendarUrl(pageUrl);
         closeAllMenus();
         currentPageUrl = pageUrl;
         updateHeaderTitles(pageUrl);

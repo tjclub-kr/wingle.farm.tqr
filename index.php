@@ -257,6 +257,24 @@ function getCodesByGroup(groupName) {
 
         .btn-cancel { background-color: #e0e0e0; color: #333; }
         .btn-save { background-color: #2c3e50; color: #fff; }
+
+        /* ==========================================================
+         * 휴대폰 가로 화면 (가로가 더 길고 높이 500px 이하)
+         *  - 412px 폭 제한을 풀어 전체 폭 사용 (calendarH.php 14일 달력용)
+         *  - 이 조건은 menu.php 의 LANDSCAPE_QUERY 와 동일해야 합니다.
+         * ========================================================== */
+        @media (orientation: landscape) and (max-height: 500px) {
+            body {
+                max-width: none;
+                border-left: none;
+                border-right: none;
+            }
+            main#content-area { padding: 8px; }
+            /* 낮은 화면에서 메뉴/모달이 잘리지 않도록 스크롤 허용 */
+            .sidebar-menu { max-height: calc(100vh - 56px); max-height: calc(100dvh - 56px); overflow-y: auto; }
+            .modal-content { max-height: 94vh; max-height: 94dvh; overflow-y: auto; }
+            .overlay { height: calc(100vh - 56px); height: calc(100dvh - 56px); }
+        }
     </style>
 </head>
 <body>
