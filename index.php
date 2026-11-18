@@ -51,6 +51,7 @@ function getCodesByGroup(groupName) {
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>모바일 웹 App</title>
     <style>
+        :root { --header-h: 36px; }   /* 상단 메뉴 높이 : 여기만 바꾸면 전체 반영 */
         * { box-sizing: border-box; margin: 0; padding: 0; }
         
         body {
@@ -71,7 +72,7 @@ function getCodesByGroup(groupName) {
         /* 1. 상단 헤더 (메뉴 영역) */
         header {
             flex-shrink: 0;
-            height: 56px;
+            height: var(--header-h);
             background-color: #2c3e50;
             color: white;
             display: flex;
@@ -88,7 +89,8 @@ function getCodesByGroup(groupName) {
             color: white;
             font-size: 24px;
             cursor: pointer;
-            padding: 5px;
+            padding: 0 5px;
+            line-height: 1;
         }
 
         .header-titles {
@@ -101,7 +103,6 @@ function getCodesByGroup(groupName) {
             font-size: 16px; 
             font-weight: bold;
             cursor: pointer;
-            text-decoration: none;
             transition: color 0.2s;
         }
 
@@ -122,7 +123,7 @@ function getCodesByGroup(groupName) {
         .sidebar-menu {
             display: none;
             position: absolute;
-            top: 56px;
+            top: var(--header-h);
             left: 0;
             width: 200px;
             background-color: #ffffff;
@@ -144,30 +145,6 @@ function getCodesByGroup(groupName) {
 
         .sidebar-menu li a:active { background-color: #e9ecef; }
 
-        /* 옵션 메뉴 */
-        .more-menu {
-            display: none;
-            position: absolute;
-            top: 56px;
-            right: 0;
-            width: 150px;
-            background-color: #ffffff;
-            box-shadow: -2px 5px 10px rgba(0,0,0,0.2);
-            z-index: 30; 
-            border-bottom-left-radius: 8px;
-        }
-
-        .more-menu ul { list-style: none; }
-
-        .more-menu li a {
-            display: block;
-            padding: 12px 15px;
-            color: #333;
-            text-decoration: none;
-            font-size: 14px;
-            border-bottom: 1px solid #eee;
-        }
-
         /* 2. 중간 컨텐츠 영역 */
         main#content-area {
             flex: 1;
@@ -179,10 +156,10 @@ function getCodesByGroup(groupName) {
         .overlay {
             display: none;
             position: absolute;
-            top: 56px;
+            top: var(--header-h);
             left: 0;
-            width: 100%;
-            height: calc(100vh - 56px);
+            right: 0;
+            bottom: 0;
             background-color: rgba(0,0,0,0.3);
             z-index: 15;
         }
@@ -260,7 +237,7 @@ function getCodesByGroup(groupName) {
 
         /* ==========================================================
          * 휴대폰 가로 화면 (가로가 더 길고 높이 500px 이하)
-         *  - 412px 폭 제한을 풀어 전체 폭 사용 (calendarH.php 14일 달력용)
+         *  - 412px 폭 제한을 풀어 전체 폭 사용 (calendarH.php 10일 달력용)
          *  - 이 조건은 menu.php 의 LANDSCAPE_QUERY 와 동일해야 합니다.
          * ========================================================== */
         @media (orientation: landscape) and (max-height: 500px) {
@@ -271,9 +248,8 @@ function getCodesByGroup(groupName) {
             }
             main#content-area { padding: 8px; }
             /* 낮은 화면에서 메뉴/모달이 잘리지 않도록 스크롤 허용 */
-            .sidebar-menu { max-height: calc(100vh - 56px); max-height: calc(100dvh - 56px); overflow-y: auto; }
+            .sidebar-menu { max-height: calc(100vh - var(--header-h)); max-height: calc(100dvh - var(--header-h)); overflow-y: auto; }
             .modal-content { max-height: 94vh; max-height: 94dvh; overflow-y: auto; }
-            .overlay { height: calc(100vh - 56px); height: calc(100dvh - 56px); }
         }
     </style>
 </head>
@@ -289,71 +265,39 @@ function getCodesByGroup(groupName) {
 
     <script>
         // 페이지 최초 진입 시 기본으로 'farmmng.php' 호출
-        window.onload = function() {
-            if (typeof loadPage === 'function') {
-                loadPage('farmmng.php', '밭 관리');
-            }
-        };
+        loadPage('farmmng.php', '밭 관리');
 
         /*
-         * 출고 관리의 년월 조회는 브라우저 전체 페이지를 이동하지 않고
-         * 현재 #content-area 안에서만 AJAX로 갱신합니다.
-         * menu.php의 loadPage()로 불러온 화면에도 동작하도록 위임 이벤트를 사용합니다.
+         * 출고 관리의 년월 조회는 전체 페이지 이동 없이 #content-area 안에서만 AJAX로 갱신합니다.
+         * loadPage()로 불러온 화면에도 동작하도록 위임 이벤트를 사용합니다.
          */
-        document.addEventListener('submit', async function(event) {
+        document.addEventListener('submit', async function (event) {
             const form = event.target.closest('form.shipping-ym-form');
             if (!form) return;
-
             event.preventDefault();
 
             const monthInput = form.querySelector('[name="search_ym"]');
             if (!monthInput || !monthInput.value) return;
 
-            const contentArea = document.getElementById('content-area');
-            if (!contentArea) return;
-
             const requestUrl = new URL(form.getAttribute('action') || 'outbound.php', window.location.href);
             requestUrl.searchParams.set('search_ym', monthInput.value);
 
-            const oldInputValue = monthInput.value;
+            const oldValue = monthInput.value;
             monthInput.disabled = true;
 
             try {
-                const response = await fetch(requestUrl.toString(), {
-                    method: 'GET',
-                    headers: { 'X-Requested-With': 'XMLHttpRequest' }
-                });
-
-                if (!response.ok) {
-                    throw new Error('HTTP ' + response.status);
-                }
-
-                const html = await response.text();
-                const fragmentHolder = document.createElement('div');
-                fragmentHolder.innerHTML = html;
-
-                // PHP 화면 조각의 style/HTML을 현재 컨텐츠 영역에만 적용합니다.
-                contentArea.innerHTML = fragmentHolder.innerHTML;
-
-                // innerHTML로 삽입된 스크립트는 자동 실행되지 않으므로 다시 생성해 실행합니다.
-                const scripts = Array.from(contentArea.querySelectorAll('script'));
-                for (const oldScript of scripts) {
-                    const newScript = document.createElement('script');
-                    for (const attr of Array.from(oldScript.attributes)) {
-                        newScript.setAttribute(attr.name, attr.value);
-                    }
-                    newScript.textContent = oldScript.textContent;
-                    oldScript.replaceWith(newScript);
-                }
+                const response = await fetch(requestUrl, { headers: { 'X-Requested-With': 'XMLHttpRequest' } });
+                if (!response.ok) throw new Error('HTTP ' + response.status);
+                setContentHtml(await response.text());   // menu.php 공용 : HTML 삽입 + 스크립트 재실행
             } catch (error) {
                 console.error('출고 년월 조회 오류:', error);
                 alert('출고 데이터를 조회하지 못했습니다. 네트워크와 서버 파일 경로를 확인해 주세요.');
-                // 실패 시 선택한 년월 입력값을 유지하고 사용자가 다시 시도할 수 있게 합니다.
-                const currentInput = document.querySelector('form.shipping-ym-form [name="search_ym"]');
-                if (currentInput) currentInput.value = oldInputValue;
+                // 실패 시 선택한 년월을 유지해 다시 시도할 수 있게 함
+                const input = document.querySelector('form.shipping-ym-form [name="search_ym"]');
+                if (input) input.value = oldValue;
             } finally {
-                const currentInput = document.querySelector('form.shipping-ym-form [name="search_ym"]');
-                if (currentInput) currentInput.disabled = false;
+                const input = document.querySelector('form.shipping-ym-form [name="search_ym"]');
+                if (input) input.disabled = false;
             }
         });
     </script>

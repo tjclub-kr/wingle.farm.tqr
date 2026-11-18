@@ -2,9 +2,10 @@
 /**
  * Calendar_common.php
  *
- * calendar.php(세로 화면, 월간)와 calendarH.php(가로 화면, 14일간)가 함께 쓰는 공통 파일
+ * calendar.php(세로 화면, 월간)와 calendarH.php(가로 화면, 10일간)가 함께 쓰는 공통 파일
  *  - calendarTaskIcons()    : 작업(task_id)별 아이콘 매핑
  *  - calendarFetchData()    : 지정한 기간의 달력 데이터 조회 (SQL 전부 여기서 처리)
+ *  - calendarEsc()          : HTML 이스케이프
  *  - calendarRenderPopup()  : 일자 클릭 시 뜨는 상세 팝업(HTML + CSS + JS)
  *
  * 이 파일은 단독으로 호출해도 아무것도 출력하지 않습니다. (함수 정의만 있음)
@@ -24,6 +25,12 @@ function calendarTaskIcons(): array
         40 => '☠️', // 농약(40~46)
         70 => '💊', // 영양제(70~72 : 1군/2군/3군)
     ];
+}
+
+/** HTML 이스케이프 (calendar.php / calendarH.php 공용) */
+function calendarEsc($value): string
+{
+    return htmlspecialchars((string)$value, ENT_QUOTES, 'UTF-8');
 }
 
 /**
@@ -92,8 +99,6 @@ function calendarFetchData(PDO $pdo, string $startYmd, string $endYmd, DateTimeZ
         ]);
 
         foreach ($stmt->fetchAll() as $row) {
-            $formattedDate = date('Y-m-d', strtotime($row['work_date']));
-
             // col_num(1~) → 열 문자(A,B,C,D ...) 로 변환 (예: '1,2,4' → 'A,B,D')
             $colLetters = [];
             foreach (explode(',', (string)($row['col_nums'] ?? '')) as $cn) {
@@ -103,10 +108,10 @@ function calendarFetchData(PDO $pdo, string $startYmd, string $endYmd, DateTimeZ
                 }
             }
             $row['col_letters'] = implode(',', $colLetters);
-            $eventsData[$formattedDate][] = $row;
+            $eventsData[$row['work_date']][] = $row;
         }
     } catch (PDOException $e) {
-        // error_log("DB 오류 (events): " . $e->getMessage());
+        error_log("DB 오류 (events): " . $e->getMessage());
     }
 
     /* ==================================================
@@ -149,7 +154,7 @@ function calendarFetchData(PDO $pdo, string $startYmd, string $endYmd, DateTimeZ
             $doneCounts[$row['task_day']] = (int)$row['done_cnt'];
         }
     } catch (PDOException $e) {
-        // error_log("DB 오류 (tasks): " . $e->getMessage());
+        error_log("DB 오류 (tasks): " . $e->getMessage());
     }
 
     // 오늘이 조회 기간에 포함될 때만 미완료 / 진행중 건수를 조회
@@ -164,7 +169,7 @@ function calendarFetchData(PDO $pdo, string $startYmd, string $endYmd, DateTimeZ
             $openCnt     = (int)($row3['open_cnt'] ?? 0);
             $progressCnt = (int)($row3['progress_cnt'] ?? 0);
         } catch (PDOException $e) {
-            // error_log("DB 오류 (tasks today): " . $e->getMessage());
+            error_log("DB 오류 (tasks today): " . $e->getMessage());
         }
     }
 
@@ -221,7 +226,7 @@ function calendarFetchData(PDO $pdo, string $startYmd, string $endYmd, DateTimeZ
             $harvestWaitDays = (int)round((float)$waitValue);
         }
     } catch (PDOException $e) {
-        // error_log("DB 오류 (common_code 수확기간): " . $e->getMessage());
+        error_log("DB 오류 (common_code 수확기간): " . $e->getMessage());
     }
 
     $pesticideWaitDays = ['40' => 1, '41' => 3, '42' => 3, '43' => 5, '44' => 5, '45' => 7, '46' => 7];
@@ -313,7 +318,7 @@ function calendarFetchData(PDO $pdo, string $startYmd, string $endYmd, DateTimeZ
             usort($harvestData[$date], function ($a, $b) { return $a['farm_id'] <=> $b['farm_id']; });
         }
     } catch (PDOException $e) {
-        // error_log("DB 오류 (harvest): " . $e->getMessage());
+        error_log("DB 오류 (harvest): " . $e->getMessage());
     }
 
     return [
@@ -339,9 +344,9 @@ function calendarRenderPopup(array $data): void
     .calendar-modal-header { padding: 12px 16px; border-bottom: 1px solid #eee; display: flex; justify-content: space-between; align-items: center; }
     .calendar-modal-header h3 { margin: 0; font-size: 1.1rem; color: #333; }
     .calendar-modal-close { cursor: pointer; font-size: 1.2rem; color: #666; }
-    .calendar-modal-body { padding: 0; overflow-y: auto; flex: 1; }
+    .calendar-modal-body { overflow-y: auto; flex: 1; }
 
-    /* 오늘의 할 일 요약 UI */
+    /* 오늘의 할 일 요약 */
     .task-summary-box { margin: 6px 10px 2px 10px; padding: 6px 8px; background-color: #f8f9fa; border: 1px solid #e0e0e0; border-radius: 6px; cursor: pointer; text-align: center; transition: all 0.2s ease; }
     .task-summary-box:hover { background-color: #e3f2fd; border-color: #90caf9; }
     .task-summary-text { font-size: 16px; color: #333; white-space: nowrap; letter-spacing: -0.5px; overflow: hidden; text-overflow: ellipsis; }
@@ -350,6 +355,7 @@ function calendarRenderPopup(array $data): void
     .event-list-item { padding: 14px 16px; border-bottom: 1px solid #f0f0f0; cursor: pointer; transition: background 0.2s; font-size: 0.95rem; color: #444; }
     .event-list-item:hover { background: #f1f8e9; }
     .event-list-item:last-child { border-bottom: none; }
+    .event-list-item.harvest { background: #e8f5e9; }
     .event-list-empty { padding: 20px; text-align: center; color: #888; font-size: 0.95rem; }
 
     /* 가로 화면(낮은 화면)에서는 팝업을 더 넓고 낮게 */
@@ -366,9 +372,7 @@ function calendarRenderPopup(array $data): void
             <span class="calendar-modal-close" onclick="closeCalendarModal()">✖</span>
         </div>
         <div class="calendar-modal-body">
-            <!-- 오늘의 할 일 통계가 출력되는 영역 -->
             <div id="calendarTaskSummary"></div>
-            <!-- 밭 작업 이벤트 리스트 영역 -->
             <ul id="calendarEventList" class="event-list"></ul>
         </div>
     </div>
@@ -378,127 +382,78 @@ function calendarRenderPopup(array $data): void
 window.calendarEventsData  = <?php echo json_encode($data['events'],  JSON_UNESCAPED_UNICODE); ?>;
 window.calendarTasksData   = <?php echo json_encode($data['tasks'],   JSON_UNESCAPED_UNICODE); ?>;
 window.calendarHarvestData = <?php echo json_encode($data['harvest'], JSON_UNESCAPED_UNICODE); ?>;
-// 작업(task_id)별 아이콘 : 달력 칸과 동일한 매핑을 상세 팝업에서도 사용
 window.calendarTaskIcons   = <?php echo json_encode($data['icons'],   JSON_UNESCAPED_UNICODE); ?>;
 
+function closeCalendarModal() {
+    document.getElementById('calendarEventModal').style.display = 'none';
+}
+
+// 팝업을 닫고 다른 화면으로 이동
+function calendarOpen(url, title) {
+    closeCalendarModal();
+    loadPage(url, title);
+}
+
 function selectCalendarDate(date) {
-    const events = window.calendarEventsData[date] || [];
-    const harvests = (window.calendarHarvestData || {})[date] || [];
-    const tasks = window.calendarTasksData[date] || null;
+    const events   = window.calendarEventsData[date]  || [];
+    const harvests = window.calendarHarvestData[date] || [];
+    const tasks    = window.calendarTasksData[date]   || null;
 
-    const modal = document.getElementById('calendarEventModal');
-    const title = document.getElementById('calendarModalTitle');
-    const summaryContainer = document.getElementById('calendarTaskSummary');
-    const listContainer = document.getElementById('calendarEventList');
+    const summary = document.getElementById('calendarTaskSummary');
+    const list    = document.getElementById('calendarEventList');
 
-    title.innerText = date + ' 상세 내역';
+    document.getElementById('calendarModalTitle').textContent = date + ' 상세 내역';
 
-    // 오늘의 할 일 요약 정보
+    // 오늘의 할 일 요약 (오늘: 미완료 / 진행중 / 완료, 그 외 날짜: 완료만)
     if (tasks && tasks.total > 0) {
-        // 오늘: 미완료 / 진행중 / 완료  |  오늘이 아닌 날짜: 완료만
-        let parts = [];
+        const parts = [];
         if (tasks.mode === 'today') {
             parts.push(`미완료 <strong style="color:#e67e22;">${tasks.incomplete}</strong>개`);
             parts.push(`진행중 <strong style="color:#3498db;">${tasks.in_progress}</strong>개`);
         }
         parts.push(`완료 <strong style="color:#2ecc71;">${tasks.completed}</strong>개`);
-        summaryContainer.innerHTML = `
-            <div class="task-summary-box" onclick="goToDailyTasks('${date}')">
-                <div class="task-summary-text">
-                    오늘의 할 일 : ${parts.join(' / ')}
-                </div>
-            </div>
-        `;
-        summaryContainer.style.display = 'block';
+        summary.innerHTML = `
+            <div class="task-summary-box" onclick="calendarOpen('dailytasks.php?d=${date}', '오늘의 할일')">
+                <div class="task-summary-text">오늘의 할 일 : ${parts.join(' / ')}</div>
+            </div>`;
+        summary.style.display = 'block';
     } else {
-        summaryContainer.innerHTML = '';
-        summaryContainer.style.display = 'none';
+        summary.innerHTML = '';
+        summary.style.display = 'none';
     }
 
-    // 이벤트 리스트 렌더링
-    listContainer.innerHTML = '';
+    list.innerHTML = '';
 
-    // 수확 가능한 구역 (밭 이름 + 구역) : 터치하면 해당 밭 상세로 이동
-    harvests.forEach(function(hv) {
+    // 목록 한 줄 추가 : 터치하면 해당 밭 상세로 이동
+    const addItem = function (text, farmId, extraClass) {
         const li = document.createElement('li');
-        li.className = 'event-list-item';
-        li.style.background = '#e8f5e9';
-        li.innerText = '🧺 ' + hv.farm_name + '밭 ' + hv.zones.join(',') + ' 구역 수확 가능';
-        li.onclick = function() {
-            closeCalendarModal();
-            if (typeof loadPage === 'function') {
-                loadPage('farmmngdtl.php?farm_id=' + hv.farm_id, '밭 상세정보');
-            } else {
-                location.href = 'farmmngdtl.php?farm_id=' + hv.farm_id;
-            }
-        };
-        listContainer.appendChild(li);
-    });
+        li.className = 'event-list-item' + (extraClass ? ' ' + extraClass : '');
+        li.textContent = text;
+        li.onclick = function () { calendarOpen('farmmngdtl.php?farm_id=' + farmId, '밭 상세정보'); };
+        list.appendChild(li);
+    };
 
     if (events.length === 0 && harvests.length === 0) {
-        listContainer.innerHTML = '<li class="event-list-empty">해당 일자에 등록된 밭 작업 기록이 없습니다.</li>';
+        list.innerHTML = '<li class="event-list-empty">해당 일자에 등록된 밭 작업 기록이 없습니다.</li>';
     } else {
-        events.forEach(function(ev) {
-            const li = document.createElement('li');
-            li.className = 'event-list-item';
+        // 수확 가능한 구역
+        harvests.forEach(function (hv) {
+            addItem('🧺 ' + hv.farm_name + '밭 ' + hv.zones.join(',') + ' 구역 수확 가능', hv.farm_id, 'harvest');
+        });
 
-            const taskId = parseInt(ev.task_id, 10);
-            let eventText = '';
-            // 열(A,B,D)은 괄호 밖, 이랑 개수는 괄호 안에 표시 : 예) A,B,D(3개 줄)
+        // 밭 작업 : "이랑" 뒤에 붙는 문구 (매핑에 없는 작업은 기본 문구)
+        const taskText = { 10: '에 물을 줌', 20: '에서 수확', 30: '에서 옆순 제거', 40: '에 농약 살포', 70: '에 영양제 투여' };
+        events.forEach(function (ev) {
+            const taskId    = parseInt(ev.task_id, 10);
+            // 열(A,B,D)은 괄호 밖, 이랑 개수는 괄호 안 : 예) A,B,D(3개 줄)
             const countText = ev.col_letters ? `${ev.col_letters}(${ev.y_count}개 줄)` : `${ev.y_count}개`;
-
-            switch (taskId) {
-                case 10:
-                    eventText = `${ev.farm_name}밭 ${countText} 이랑에 물을 줌`;
-                    break;
-                case 20:
-                    eventText = `${ev.farm_name}밭 ${countText} 이랑에서 수확`;
-                    break;
-                case 30:
-                    eventText = `${ev.farm_name}밭 ${countText} 이랑에서 옆순 제거`;
-                    break;
-                case 40:
-                    eventText = `${ev.farm_name}밭 ${countText} 이랑에 농약 살포`;
-                    break;
-                case 70:
-                    eventText = `${ev.farm_name}밭 ${countText} 이랑에 영양제 투여`;
-                    break;
-                default:
-                    eventText = `${ev.farm_name}밭 ${countText} 이랑에 작업(${ev.task_id}) 적용`;
-                    break;
-            }
-
-            // 맨 앞에 이벤트(작업)별 아이콘 표시 (매핑에 없는 작업은 📌)
-            const eventIcon = (window.calendarTaskIcons && window.calendarTaskIcons[taskId]) || '📌';
-            li.innerText = eventIcon + ' ' + eventText;
-
-            li.onclick = function() {
-                closeCalendarModal();
-                if (typeof loadPage === 'function') {
-                    loadPage('farmmngdtl.php?farm_id=' + ev.farm_id, '밭 상세정보');
-                } else {
-                    location.href = 'farmmngdtl.php?farm_id=' + ev.farm_id;
-                }
-            };
-
-            listContainer.appendChild(li);
+            const suffix    = taskText[taskId] || `에 작업(${ev.task_id}) 적용`;
+            const icon      = window.calendarTaskIcons[taskId] || '📌';
+            addItem(`${icon} ${ev.farm_name}밭 ${countText} 이랑${suffix}`, ev.farm_id);
         });
     }
 
-    modal.style.display = 'flex';
-}
-
-function goToDailyTasks(date) {
-    closeCalendarModal();
-    if (typeof loadPage === 'function') {
-        loadPage('dailytasks.php?d=' + date, '오늘의 할일');
-    } else {
-        location.href = 'dailytasks.php?d=' + date;
-    }
-}
-
-function closeCalendarModal() {
-    document.getElementById('calendarEventModal').style.display = 'none';
+    document.getElementById('calendarEventModal').style.display = 'flex';
 }
 </script>
     <?php

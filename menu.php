@@ -1,5 +1,5 @@
 <!-- ==========================================
-     menu.php : 상단 메뉴, 드롭다운, 모달 및 스크립트
+     menu.php : 상단 메뉴, 사이드바, 할일 모달 및 화면 로드 스크립트
      ========================================== -->
 
 <!-- 오늘의 할일 첨부파일 설정: 여기서 최대 개수/허용 확장자를 변경할 수 있습니다. -->
@@ -64,19 +64,19 @@ window.TODO_ATTACHMENT_EXTENSIONS = ['jpg','jpeg','png','gif','webp','pdf','txt'
 <!-- 1. 상단 메뉴 영역 (헤더) -->
 <header>
     <!-- 왼쪽 햄버거 아이콘 -->
-    <button class="icon-btn" onclick="toggleMenu('sidebar')">☰</button>
+    <button class="icon-btn" onclick="toggleSidebar()">☰</button>
     
     <!-- 중앙 타이틀 영역 -->
     <div class="header-titles">
-        <span class="header-title inactive" id="title-daily" onclick="handleTitleClick('dailytasks.php', '오늘의 할일')">오늘의 할일</span>
-        <span class="header-title active" id="title-farm" onclick="handleTitleClick('farmmng.php', '밭 관리')">밭 관리</span>
-        <span class="header-title inactive" id="title-memo" onclick="handleTitleClick('memo.php', '메모장')">메모장</span>
-        <span class="header-title inactive" id="title-shipping" onclick="handleTitleClick('outbound.php', '출고 관리')">출고</span>
+        <span class="header-title inactive" id="title-daily" onclick="loadPage('dailytasks.php', '오늘의 할일')">오늘의 할일</span>
+        <span class="header-title active" id="title-farm" onclick="loadPage('farmmng.php', '밭 관리')">밭 관리</span>
+        <span class="header-title inactive" id="title-memo" onclick="loadPage('memo.php', '메모장')">메모장</span>
+        <span class="header-title inactive" id="title-shipping" onclick="loadPage('outbound.php', '출고 관리')">출고</span>
     </div>
 
     <!-- 오른쪽 아이콘 묶음 영역 -->
     <div class="header-right">
-        <!-- 원(₩) 아이콘 : 수입 내역(farm_income.php) -->
+        <!-- 수입 내역(farm_income.php) -->
         <button
             class="icon-btn"
             onclick="loadPage('farm_income.php', '수입 내역')"
@@ -113,18 +113,7 @@ window.TODO_ATTACHMENT_EXTENSIONS = ['jpg','jpeg','png','gif','webp','pdf','txt'
             <li><a href="#" onclick="loadPage('outbound.php', '출고 관리'); return false;">출고</a></li>
             <li><a href="#" onclick="loadPage('calendar.php', '달력'); return false;">달력</a></li>
             <li><a href="#" onclick="loadPage('farmSet.php', '밭 설정'); return false;">밭 설정</a></li>
-			<li><a href="#" onclick="loadPage('commonmng.php','공통코드'); return false;">공통코드</a></li>
-<!--            <li><a href="#" onclick="loadPage('parsing.php', '분석'); return false;">분석</a></li> -->
-<!--            <li><a href="#" onclick="loadPage('environment_monitoring.php', '환경정보'); return false;">환경정보</a></li> -->
-            <!-- li><a href="#" onclick="loadPage('dataClear.php', '데이터클리어'); return false;">데이터클리어</a></li -->
-        </ul>
-    </nav>
-
-    <!-- 점세개 옵션 메뉴 -->
-    <nav class="more-menu" id="more">
-        <ul>
-            <li><a href="#" onclick="alert('설정 기능 준비 중입니다.'); return false;">설정</a></li>
-            <li><a href="#" onclick="location.reload(); return false;">새로고침</a></li>
+            <li><a href="#" onclick="loadPage('commonmng.php', '공통코드'); return false;">공통코드</a></li>
         </ul>
     </nav>
 </header>
@@ -172,132 +161,92 @@ window.TODO_ATTACHMENT_EXTENSIONS = ['jpg','jpeg','png','gif','webp','pdf','txt'
 <!-- 메뉴 및 동적 콘텐츠 제어 스크립트 -->
 <script>
     let currentPageUrl = 'farmmng.php';
+    let loadSeq = 0;   // 화면을 빠르게 연속 전환할 때 늦게 도착한 이전 응답이 덮어쓰지 않도록 하는 번호
 
-    function toggleMenu(menuType) {
-        const sidebar = document.getElementById('sidebar');
-        const more = document.getElementById('more');
-        const overlay = document.getElementById('overlay');
-
-        if (menuType === 'sidebar') {
-            const isVisible = sidebar.style.display === 'block';
-            closeAllMenus();
-            if (!isVisible) {
-                sidebar.style.display = 'block';
-                overlay.style.display = 'block';
-            }
-        } else if (menuType === 'more') {
-            const isVisible = more.style.display === 'block';
-            closeAllMenus();
-            if (!isVisible) {
-                more.style.display = 'block';
-                overlay.style.display = 'block';
-            }
-        }
-    }
-
+    /* ---------- 사이드바 ---------- */
     function closeAllMenus() {
+        document.getElementById('sidebar').style.display = 'none';
+        document.getElementById('overlay').style.display = 'none';
+    }
+
+    function toggleSidebar() {
         const sidebar = document.getElementById('sidebar');
-        const more = document.getElementById('more');
-        const overlay = document.getElementById('overlay');
-        
-        if (sidebar) sidebar.style.display = 'none';
-        if (more) more.style.display = 'none';
-        if (overlay) overlay.style.display = 'none';
-    }
-
-    function handleTitleClick(pageUrl, title) {
-        loadPage(pageUrl, title);
-    }
-
-    // 상단 타이틀 스타일 업데이트
-	function updateHeaderTitles(pageUrl) {
-		const titleDaily = document.getElementById('title-daily');
-		const titleFarm = document.getElementById('title-farm');
-		const titleMemo = document.getElementById('title-memo');
-		const titleShipping = document.getElementById('title-shipping');
-
-		if (titleDaily) titleDaily.className = 'header-title inactive';
-		if (titleFarm) titleFarm.className = 'header-title inactive';
-		if (titleMemo) titleMemo.className = 'header-title inactive';
-		if (titleShipping) titleShipping.className = 'header-title inactive';
-
-		if (pageUrl.includes('dailytasks.php') && titleDaily) {
-			titleDaily.className = 'header-title active';
-		} else if ((pageUrl.includes('farmmng.php') || pageUrl.includes('farmmngdtl.php')) && titleFarm) { 
-			titleFarm.className = 'header-title active';
-		} else if (pageUrl.includes('memo.php') && titleMemo) {
-			titleMemo.className = 'header-title active';
-		} else if (pageUrl.includes('outbound.php') && titleShipping) {
-			titleShipping.className = 'header-title active';
-		}
-	}
-
-    function openTodoModal() {
+        const wasOpen = sidebar.style.display === 'block';
         closeAllMenus();
-        const today = new Date();
-        const localDate = new Date(today.getTime() - (today.getTimezoneOffset() * 60000)).toISOString().split('T')[0];
-        
-        // 등록일자 기본값은 빈 값 (오늘 이전은 선택 불가)
-        const dateInput = document.getElementById('todo-date');
-        if (dateInput) {
-            dateInput.value = '';
-            dateInput.min = localDate;
+        if (!wasOpen) {
+            sidebar.style.display = 'block';
+            document.getElementById('overlay').style.display = 'block';
         }
-
-        // 중요도 기본값은 3 하
-        const importanceInput = document.getElementById('todo-importance');
-        if (importanceInput) importanceInput.value = '3';
-
-        const contentInput = document.getElementById('todo-content');
-        if (contentInput) contentInput.value = '';
-        
-        // 첨부파일 초기화 및 확장자 설정 연동
-        const fileInput = document.getElementById('todo-attachments');
-        if (fileInput) { 
-            fileInput.value = ''; 
-            fileInput.accept = (window.TODO_ATTACHMENT_EXTENSIONS || []).map(e => '.' + e).join(','); 
-        }
-        updateTodoAttachmentHelp();
-        
-        const todoModal = document.getElementById('todoModal');
-        if (todoModal) todoModal.style.display = 'flex';
     }
 
+    // 상단 타이틀 활성/비활성 표시
+    function updateHeaderTitles(pageUrl) {
+        const titlePages = {
+            'title-daily':    ['dailytasks.php'],
+            'title-farm':     ['farmmng.php', 'farmmngdtl.php'],
+            'title-memo':     ['memo.php'],
+            'title-shipping': ['outbound.php']
+        };
+        for (const id in titlePages) {
+            const el = document.getElementById(id);
+            if (el) el.className = 'header-title ' + (titlePages[id].some(p => pageUrl.includes(p)) ? 'active' : 'inactive');
+        }
+    }
+
+    /* ---------- 새 할일 모달 ---------- */
     // 오늘 날짜(YYYY-MM-DD, 로컬 기준)
     function getTodayLocalDate() {
         const now = new Date();
         return new Date(now.getTime() - (now.getTimezoneOffset() * 60000)).toISOString().split('T')[0];
     }
 
-    // 등록일자가 비어 있을 때 달력을 누르면 오늘이 표시되도록 함
+    function openTodoModal() {
+        closeAllMenus();
+
+        // 등록일자 기본값은 빈 값 (오늘 이전은 선택 불가)
+        const dateInput = document.getElementById('todo-date');
+        dateInput.value = '';
+        dateInput.min = getTodayLocalDate();
+
+        document.getElementById('todo-importance').value = '3';   // 기본 중요도 : 하
+        document.getElementById('todo-content').value = '';
+
+        // 첨부파일 초기화 및 허용 확장자 연동
+        const fileInput = document.getElementById('todo-attachments');
+        fileInput.value = '';
+        fileInput.accept = (window.TODO_ATTACHMENT_EXTENSIONS || []).map(e => '.' + e).join(',');
+        updateTodoAttachmentHelp();
+
+        document.getElementById('todoModal').style.display = 'flex';
+    }
+
+    function closeTodoModal() {
+        document.getElementById('todoModal').style.display = 'none';
+    }
+
+    // 등록일자가 비어 있을 때 입력칸을 누르면 오늘이 표시되도록 함
     function fillTodoDateWithToday() {
         const dateInput = document.getElementById('todo-date');
-        if (dateInput && !dateInput.value) dateInput.value = getTodayLocalDate();
+        if (!dateInput.value) dateInput.value = getTodayLocalDate();
     }
 
     // 등록일자 지우기 (등록일자 없이 등록)
     function clearTodoDate() {
-        const dateInput = document.getElementById('todo-date');
-        if (dateInput) dateInput.value = '';
-    }
-
-    function closeTodoModal() {
-        const todoModal = document.getElementById('todoModal');
-        if (todoModal) todoModal.style.display = 'none';
+        document.getElementById('todo-date').value = '';
     }
 
     function updateTodoAttachmentHelp() {
-        const el = document.getElementById('todo-attachment-help'); 
-        if(!el) return;
-        const max = Number(window.TODO_ATTACHMENT_MAX_FILES || 5); 
+        const max = Number(window.TODO_ATTACHMENT_MAX_FILES || 5);
         const ext = (window.TODO_ATTACHMENT_EXTENSIONS || []).join(', ').toUpperCase();
-        el.textContent = `최대 ${max}개 / ${ext} / 파일당 20MB`;
+        document.getElementById('todo-attachment-help').textContent = `최대 ${max}개 / ${ext} / 파일당 20MB`;
     }
 
     function saveTodo() {
-        const taskDate = document.getElementById('todo-date').value; // 선택 입력 (빈 값이면 등록일자 없이 등록)
-        const content = document.getElementById('todo-content').value;
+        const taskDate   = document.getElementById('todo-date').value;   // 선택 입력 (빈 값이면 등록일자 없이 등록)
+        const content    = document.getElementById('todo-content').value;
         const importance = document.getElementById('todo-importance').value || '3';
+        const files      = document.getElementById('todo-attachments').files;
+        const maxFiles   = Number(window.TODO_ATTACHMENT_MAX_FILES || 5);
 
         if (!content.trim()) {
             alert('할일 내용을 입력해 줘!');
@@ -307,77 +256,70 @@ window.TODO_ATTACHMENT_EXTENSIONS = ['jpg','jpeg','png','gif','webp','pdf','txt'
             alert('오늘 이전 날짜로는 등록할 수 없어!');
             return;
         }
+        if (files.length > maxFiles) {
+            alert('첨부파일은 최대 ' + maxFiles + '개까지 등록할 수 있습니다.');
+            return;
+        }
 
         const formData = new FormData();
         if (taskDate) formData.append('task_date', taskDate);
         formData.append('content', content);
         formData.append('importance', importance);
-        
-        const files = document.getElementById('todo-attachments')?.files || [];
-        const maxFiles = Number(window.TODO_ATTACHMENT_MAX_FILES || 5);
-        if (files.length > maxFiles) { 
-            alert('첨부파일은 최대 ' + maxFiles + '개까지 등록할 수 있습니다.'); 
-            return; 
-        }
         for (const file of files) formData.append('attachments[]', file);
 
-        fetch('dailytasks.php?action=add_todo', {
-            method: 'POST',
-            body: formData
-        })
-        .then(response => {
-            if (!response.ok) throw new Error('서버 통신 오류');
-            return response.text();
-        })
-        .then(data => {
-            alert('할일이 성공적으로 저장됐어!');
-            closeTodoModal();
-            // 현재 보고 있던 페이지가 할 일 페이지면, 보고 있던 날짜(파라미터 포함된 URL)를 그대로 유지하며 새로고침
-            if (currentPageUrl.includes('dailytasks.php')) {
-                loadPage(currentPageUrl, '오늘의 할일');
-            }
-        })
-        .catch(error => {
-            alert('저장 중 문제가 발생했어: ' + error.message);
-        });
+        fetch('dailytasks.php?action=add_todo', { method: 'POST', body: formData })
+            .then(response => {
+                if (!response.ok) throw new Error('서버 통신 오류');
+            })
+            .then(() => {
+                alert('할일이 성공적으로 저장됐어!');
+                closeTodoModal();
+                // 할 일 화면을 보고 있었다면 보던 날짜(파라미터 포함 URL)를 유지한 채 새로고침
+                if (currentPageUrl.includes('dailytasks.php')) {
+                    loadPage(currentPageUrl, '오늘의 할일');
+                }
+            })
+            .catch(error => {
+                alert('저장 중 문제가 발생했어: ' + error.message);
+            });
     }
 
-    // AJAX로 동적 페이지 로드
-    // ------------------------------------------------------------
-    // 달력 화면 방향 처리
-    //  - 세로 화면 : calendar.php  (월간)
-    //  - 가로 화면 : calendarH.php (14일간)
-    // 휴대폰 가로 화면 = 가로가 더 길고, 높이가 500px 이하인 화면
-    // (index.php 의 CSS 미디어쿼리와 같은 조건)
-    // ------------------------------------------------------------
+    /* ---------- 달력 화면 방향 처리 ----------
+     *  - 세로 화면 : calendar.php  (월간)
+     *  - 가로 화면 : calendarH.php (10일간)
+     * 휴대폰 가로 화면 = 가로가 더 길고 높이 500px 이하 (index.php 의 CSS 미디어쿼리와 같은 조건)
+     */
     const LANDSCAPE_QUERY = '(orientation: landscape) and (max-height: 500px)';
-
-    function isLandscapeMode() {
-        return window.matchMedia(LANDSCAPE_QUERY).matches;
-    }
 
     // calendar.php / calendarH.php 요청을 현재 화면 방향에 맞는 파일로 바꿔 줌
     function resolveCalendarUrl(pageUrl) {
         const m = String(pageUrl).match(/^calendar(H)?\.php(\?.*)?$/i);
         if (!m) return pageUrl;
-        const wantLandscape = isLandscapeMode();
-        const isLandscapePage = !!m[1];
-        if (wantLandscape === isLandscapePage) return pageUrl;
+        const wantLandscape = window.matchMedia(LANDSCAPE_QUERY).matches;
+        if (wantLandscape === !!m[1]) return pageUrl;
         // 방향이 다르면 파라미터(year/month ↔ base)가 호환되지 않으므로 기본(오늘) 화면으로 이동
         return wantLandscape ? 'calendarH.php' : 'calendar.php';
     }
 
-    // 화면을 돌리면 달력을 보고 있을 때만 자동으로 해당 방향의 달력으로 다시 불러옴
-    (function watchOrientation() {
-        const mql = window.matchMedia(LANDSCAPE_QUERY);
-        const onChange = function() {
-            if (!/^calendar(H)?\.php/i.test(currentPageUrl)) return;
-            const resolved = resolveCalendarUrl(currentPageUrl);
-            if (resolved !== currentPageUrl) loadPage(resolved, '달력');
-        };
-        if (mql.addEventListener) mql.addEventListener('change', onChange);
-        else if (mql.addListener) mql.addListener(onChange);
-    })();
+    // 화면을 돌리면 달력을 보고 있을 때만 해당 방향의 달력으로 다시 불러옴
+    window.matchMedia(LANDSCAPE_QUERY).addEventListener('change', function () {
+        if (!/^calendar(H)?\.php/i.test(currentPageUrl)) return;
+        const resolved = resolveCalendarUrl(currentPageUrl);
+        if (resolved !== currentPageUrl) loadPage(resolved, '달력');
+    });
+
+    /* ---------- 동적 페이지 로드 (AJAX) ---------- */
+    // 컨텐츠 영역에 HTML을 넣고, innerHTML 로는 실행되지 않는 script 를 다시 만들어 실행
+    function setContentHtml(html) {
+        const container = document.getElementById('content-area');
+        container.innerHTML = html;
+        container.querySelectorAll('script').forEach(oldScript => {
+            const newScript = document.createElement('script');
+            Array.from(oldScript.attributes).forEach(attr => newScript.setAttribute(attr.name, attr.value));
+            newScript.textContent = oldScript.textContent;
+            oldScript.replaceWith(newScript);
+        });
+    }
 
     function loadPage(pageUrl, title) {
         pageUrl = resolveCalendarUrl(pageUrl);
@@ -385,6 +327,7 @@ window.TODO_ATTACHMENT_EXTENSIONS = ['jpg','jpeg','png','gif','webp','pdf','txt'
         currentPageUrl = pageUrl;
         updateHeaderTitles(pageUrl);
 
+        const seq = ++loadSeq;
         fetch('./' + pageUrl)
             .then(response => {
                 if (!response.ok) {
@@ -393,28 +336,16 @@ window.TODO_ATTACHMENT_EXTENSIONS = ['jpg','jpeg','png','gif','webp','pdf','txt'
                 return response.text();
             })
             .then(html => {
-                const container = document.getElementById('content-area');
-                if (!container) return;
-                container.innerHTML = html;
-
-                const scripts = container.querySelectorAll('script');
-                scripts.forEach(oldScript => {
-                    const newScript = document.createElement('script');
-                    Array.from(oldScript.attributes).forEach(attr => newScript.setAttribute(attr.name, attr.value));
-                    newScript.appendChild(document.createTextNode(oldScript.innerHTML));
-                    oldScript.parentNode.replaceChild(newScript, oldScript);
-                });
+                if (seq === loadSeq) setContentHtml(html);
             })
             .catch(error => {
-                const container = document.getElementById('content-area');
-                if (container) {
-                    container.innerHTML = 
-                        `<div style="color:red; text-align:center; padding-top:20px;">
-                            <p><strong>오류 발생!</strong></p>
-                            <p>${error.message}</p>
-                            <p style="font-size:12px; color:#666; margin-top:10px;">서버 경로에 <strong>${pageUrl}</strong> 파일이 있는지 확인해 줘.</p>
-                        </div>`;
-                    }
+                if (seq !== loadSeq) return;
+                document.getElementById('content-area').innerHTML =
+                    `<div style="color:red; text-align:center; padding-top:20px;">
+                        <p><strong>오류 발생!</strong></p>
+                        <p>${error.message}</p>
+                        <p style="font-size:12px; color:#666; margin-top:10px;">서버 경로에 <strong>${pageUrl}</strong> 파일이 있는지 확인해 줘.</p>
+                    </div>`;
             });
     }
 </script>
