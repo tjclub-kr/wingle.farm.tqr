@@ -33,6 +33,7 @@
  *     · 그래프 데이터는 GET ?action=daily&year=YYYY&month=M 요청에 JSON 으로 응답한다.
  */
 declare(strict_types=1);
+require_once __DIR__ . '/auth_check.php';   // ← 추가 (맨 위)
 
 /* --------------------------------------------------
  * DB 연결 설정

@@ -1,4 +1,6 @@
 <?php
+require_once __DIR__ . '/auth_check.php';   // ← 추가 (맨 위)
+
 require_once __DIR__ . '/db_connect.php';
 
 // 오늘의 할일 첨부파일 설정 (백엔드 기본값)

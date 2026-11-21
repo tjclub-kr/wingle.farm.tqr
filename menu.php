@@ -59,6 +59,29 @@ window.TODO_ATTACHMENT_EXTENSIONS = ['jpg','jpeg','png','gif','webp','pdf','txt'
             padding: 2px;
         }
     }
+
+    /* 월간 가로 달력 팝업 (햄버거 메뉴 → 달력 (가로 보기)) : 날짜 상세 팝업(z-index 2000)보다 아래 */
+    .wide-cal-overlay {
+        display: none;
+        position: fixed;
+        inset: 0;
+        background-color: rgba(0, 0, 0, 0.5);
+        z-index: 1500;
+        justify-content: center;
+        align-items: center;
+    }
+    .wide-cal-box {
+        width: 98vw;
+        height: 96vh;
+        height: 96dvh;
+        background: #fff;
+        border-radius: 8px;
+        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+    }
+    #wideCalBody { flex: 1; min-height: 0; overflow: auto; }
 </style>
 
 <!-- 1. 상단 메뉴 영역 (헤더) -->
@@ -112,14 +135,25 @@ window.TODO_ATTACHMENT_EXTENSIONS = ['jpg','jpeg','png','gif','webp','pdf','txt'
             <li><a href="#" onclick="loadPage('memo.php', '메모장'); return false;">메모장</a></li>
             <li><a href="#" onclick="loadPage('outbound.php', '출고 관리'); return false;">출고</a></li>
             <li><a href="#" onclick="loadPage('calendar.php', '달력'); return false;">달력</a></li>
+            <li><a href="#" onclick="openWideCalendar(); return false;">달력 (FHD)</a></li>
             <li><a href="#" onclick="loadPage('farmSet.php', '밭 설정'); return false;">밭 설정</a></li>
             <li><a href="#" onclick="loadPage('commonmng.php', '공통코드'); return false;">공통코드</a></li>
-        </ul>
+            <li><a href="#" onclick="loadPage('Dbbackup.php', 'DB백업'); return false;">DB 백업</a></li>
+			<li><a href="#" onclick="loadPage('hashtool.php', '해시 변환'); return false;">해시 변환</a></li>
+			<li><a href="logout.php">로그아웃</a></li>
+		</ul>
     </nav>
 </header>
 
 <!-- 바깥 영역 클릭 시 메뉴 닫기용 오버레이 -->
 <div class="overlay" id="overlay" onclick="closeAllMenus()"></div>
+
+<!-- 월간 가로 달력 팝업 (바깥 영역 클릭 / Esc / ✖ 로 닫기) -->
+<div class="wide-cal-overlay" id="wideCalModal" onclick="if (event.target === this) closeWideCalendar();">
+    <div class="wide-cal-box">
+        <div id="wideCalBody"></div>
+    </div>
+</div>
 
 <!-- 할일 추가 팝업(모달) 영역 -->
 <div class="modal-overlay" id="todoModal">
@@ -161,6 +195,7 @@ window.TODO_ATTACHMENT_EXTENSIONS = ['jpg','jpeg','png','gif','webp','pdf','txt'
 <!-- 메뉴 및 동적 콘텐츠 제어 스크립트 -->
 <script>
     let currentPageUrl = 'farmmng.php';
+    let wideSeq = 0;   // 가로 달력 팝업용 요청 번호
     let loadSeq = 0;   // 화면을 빠르게 연속 전환할 때 늦게 도착한 이전 응답이 덮어쓰지 않도록 하는 번호
 
     /* ---------- 사이드바 ---------- */
@@ -310,8 +345,7 @@ window.TODO_ATTACHMENT_EXTENSIONS = ['jpg','jpeg','png','gif','webp','pdf','txt'
 
     /* ---------- 동적 페이지 로드 (AJAX) ---------- */
     // 컨텐츠 영역에 HTML을 넣고, innerHTML 로는 실행되지 않는 script 를 다시 만들어 실행
-    function setContentHtml(html) {
-        const container = document.getElementById('content-area');
+    function setContentHtml(html, container = document.getElementById('content-area')) {
         container.innerHTML = html;
         container.querySelectorAll('script').forEach(oldScript => {
             const newScript = document.createElement('script');
@@ -348,4 +382,48 @@ window.TODO_ATTACHMENT_EXTENSIONS = ['jpg','jpeg','png','gif','webp','pdf','txt'
                     </div>`;
             });
     }
+
+    /* ---------- 월간 가로 달력 팝업 ---------- */
+    function openWideCalendar() {
+        closeAllMenus();
+        document.getElementById('wideCalModal').style.display = 'flex';
+        loadWideCalendar('calendarWide.php');
+    }
+
+    // 팝업 안에서만 달력을 갱신 (◀ ▶ 오늘)
+    function loadWideCalendar(url) {
+        const body = document.getElementById('wideCalBody');
+        const seq = ++wideSeq;
+        fetch('./' + url)
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error(`파일을 불러올 수 없습니다. (HTTP ${response.status} ${response.statusText})`);
+                }
+                return response.text();
+            })
+            .then(html => {
+                if (seq === wideSeq) setContentHtml(html, body);
+            })
+            .catch(error => {
+                if (seq !== wideSeq) return;
+                body.innerHTML = `<div style="color:red; text-align:center; padding:30px;">
+                    <p><strong>오류 발생!</strong></p><p>${error.message}</p>
+                    <p><button type="button" onclick="closeWideCalendar()">닫기</button></p></div>`;
+            });
+    }
+
+    // skipReload : 팝업에서 다른 화면으로 이동하는 중이면 true (아래 달력 다시 불러오기 생략)
+    function closeWideCalendar(skipReload) {
+        const modal = document.getElementById('wideCalModal');
+        if (modal.style.display !== 'flex') return;
+        modal.style.display = 'none';
+        wideSeq++;
+        document.getElementById('wideCalBody').innerHTML = '';   // 팝업의 달력 데이터/팝업 요소 제거
+        // 뒤에서 달력 화면을 보고 있었다면 (공용 전역 데이터가 바뀌었으므로) 다시 불러옴
+        if (!skipReload && /^calendar(H)?\.php/i.test(currentPageUrl)) loadPage(currentPageUrl, '달력');
+    }
+
+    document.addEventListener('keydown', function (event) {
+        if (event.key === 'Escape') closeWideCalendar();
+    });
 </script>

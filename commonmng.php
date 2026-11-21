@@ -1,5 +1,6 @@
 <?php
 // DB 접속 정보 설정
+require_once __DIR__ . '/auth_check.php';   // ← 추가 (맨 위)
 require_once __DIR__ . '/db_connect.php';
 
 // --------------------------------------------------

@@ -1,5 +1,6 @@
 <?php
 date_default_timezone_set('Asia/Seoul');
+require_once __DIR__ . '/auth_check.php';   // ← 추가 (맨 위)
 
 require_once __DIR__ . '/db_connect.php';
 

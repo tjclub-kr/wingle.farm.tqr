@@ -1,5 +1,6 @@
 <?php
 // DB 연결 설정
+require_once __DIR__ . '/auth_check.php';   // ← 추가 (맨 위)
 require_once __DIR__ . '/db_connect.php';
 
 $dsn = "mysql:host=$host;port=$port;dbname=$db;charset=$charset";

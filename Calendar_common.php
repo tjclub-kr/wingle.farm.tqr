@@ -6,6 +6,8 @@
  *  - calendarTaskIcons()    : 작업(task_id)별 아이콘 매핑
  *  - calendarFetchData()    : 지정한 기간의 달력 데이터 조회 (SQL 전부 여기서 처리)
  *  - calendarEsc()          : HTML 이스케이프
+ *  - calendarQuadFarms() / calendarRenderLegend() / calendarRenderQuads() / calendarRenderQuadStyle()
+ *                           : 날짜 칸 6구역(밭별 표시)과 밭 안내 - calendarH.php, calendarWide.php 공용
  *  - calendarRenderPopup()  : 일자 클릭 시 뜨는 상세 팝업(HTML + CSS + JS)
  *
  * 이 파일은 단독으로 호출해도 아무것도 출력하지 않습니다. (함수 정의만 있음)
@@ -330,6 +332,114 @@ function calendarFetchData(PDO $pdo, string $startYmd, string $endYmd, DateTimeZ
     ];
 }
 
+/* --------------------------------------------------
+ * 날짜 칸 6구역 (가로 3 x 세로 2) : 좌상, 중상, 우상, 좌하, 중하, 우하
+ *  - 사용 중(use_yn = 'Y')인 밭을 정렬순서(sort_order) 순으로 최대 6개 (넘는 밭은 표시하지 않음)
+ * -------------------------------------------------- */
+function calendarQuadFarms(PDO $pdo): array
+{
+    try {
+        $stmt = $pdo->prepare("
+            SELECT farm_id, farm_name
+            FROM farms
+            WHERE use_yn = 'Y'
+            ORDER BY sort_order ASC, farm_id ASC
+            LIMIT 6
+        ");
+        $stmt->execute();
+        return $stmt->fetchAll(PDO::FETCH_ASSOC);
+    } catch (PDOException $e) {
+        error_log("DB 오류 (farms): " . $e->getMessage());
+        return [];
+    }
+}
+
+/** 6구역에 표시되는 밭 안내 (↖ ↑ ↗ ↙ ↓ ↘ 구역별 밭 이름) */
+function calendarRenderLegend(array $quadFarms): void
+{
+    if (!$quadFarms) {
+        echo '<span>사용 중인 밭이 없습니다.</span>';
+        return;
+    }
+    $marks = ['↖', '↑', '↗', '↙', '↓', '↘'];
+    foreach ($quadFarms as $i => $qf) {
+        echo '<span class="lg"><b>' . $marks[$i] . '</b> ' . calendarEsc($qf['farm_name']) . '</span>';
+    }
+}
+
+/** 하루 칸 안의 6구역(밭별 수확 가능 구역 + 작업 이벤트)을 출력 */
+function calendarRenderQuads(array $quadFarms, string $date, array $calData): void
+{
+    $eventsByFarm = [];
+    foreach (($calData['events'][$date] ?? []) as $event) {
+        $eventsByFarm[(int)$event['farm_id']][] = $event;
+    }
+    $harvestByFarm = [];
+    foreach (($calData['harvest'][$date] ?? []) as $hv) {
+        $harvestByFarm[(int)$hv['farm_id']] = $hv;
+    }
+    $icons = $calData['icons'];
+
+    echo '<div class="calh-quads">';
+    for ($q = 0; $q < 6; $q++) {
+        $qf     = $quadFarms[$q] ?? null;
+        $farmId = $qf !== null ? (int)$qf['farm_id'] : null;
+        $canHarvest = $farmId !== null && isset($harvestByFarm[$farmId]);
+
+        echo '<div class="calh-quad' . ($canHarvest ? ' harvestable' : '') . '">';
+        if ($qf !== null) {
+            $farmName = calendarEsc($qf['farm_name']);
+
+            // 수확 가능한 구역 : 예) 🧺A,C
+            if ($canHarvest) {
+                $hvText = '🧺' . implode(',', $harvestByFarm[$farmId]['zones']);
+                echo '<span class="calh-chip harvest-item" title="' . $farmName . ' 수확 가능 ' . $hvText . '"><b>' . $hvText . '</b></span>';
+            }
+
+            // 작업 이벤트 : 아이콘 + 이랑 개수  예) 💧5
+            foreach (($eventsByFarm[$farmId] ?? []) as $event) {
+                $chipText = ($icons[(int)$event['task_id']] ?? '📌') . (int)$event['y_count'];
+                echo '<span class="calh-chip" title="' . $farmName . ' ' . $chipText . '">' . $chipText . '</span>';
+            }
+        }
+        echo '</div>';
+    }
+    echo '</div>';
+}
+
+/** 6구역 날짜 칸 / 밭 안내의 공통 스타일 */
+function calendarRenderQuadStyle(): void
+{
+    ?>
+<style>
+    .calh-cell { min-height: 0; min-width: 0; border-right: 1px solid #eee; border-bottom: 1px solid #eee; padding: 3px; background: #fff; display: flex; flex-direction: column; overflow: hidden; }
+    .calh-cell.today { background: #fffde7; }
+    .calh-link { display: flex; flex-direction: column; width: 100%; height: 100%; min-height: 0; color: inherit; text-decoration: none; cursor: pointer; }
+    .calh-head { flex-shrink: 0; display: flex; align-items: center; justify-content: space-between; padding: 0 1px; margin-bottom: 2px; }
+    .calh-date { display: inline-flex; align-items: center; justify-content: center; min-width: 22px; height: 22px; padding: 0 5px; border-radius: 11px; font-size: 12px; font-weight: 700; color: #333; white-space: nowrap; }
+    .calh-date .dow { font-size: 10px; font-weight: 600; margin-left: 2px; }
+    .calh-date.sun { color: #d32f2f; }
+    .calh-date.sat { color: #1976d2; }
+    .calh-cell.today .calh-date { background: #1976d2; color: #fff; }
+    .calh-count { font-size: 10px; color: #1976d2; font-weight: bold; }
+
+    /* 날짜 칸 6구역 (가로 3 x 세로 2) : 1~3번 밭 / 4~6번 밭 */
+    .calh-quads { flex: 1; min-height: 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); grid-template-rows: minmax(0, 1fr) minmax(0, 1fr); gap: 1px; }
+    .calh-quad { min-width: 0; min-height: 0; overflow-y: auto; overflow-x: hidden; display: flex; flex-wrap: wrap; align-content: flex-start; gap: 0 4px; padding: 1px 2px; font-size: 10px; line-height: 1.35; color: #555; }
+    .calh-quad.harvestable { background: #e8f5e9; }   /* 해당 밭이 수확 가능한 날 : 그 밭 구역만 연한 녹색 */
+    .calh-quad::-webkit-scrollbar { width: 2px; }
+    .calh-quad::-webkit-scrollbar-thumb { background: #ccc; border-radius: 2px; }
+    .calh-chip { white-space: nowrap; letter-spacing: -0.5px; }
+    .calh-chip.harvest-item, .calh-chip.harvest-item b { font-weight: 900 !important; color: #2e7d32; }
+
+    /* 6구역에 표시되는 밭 안내 (헤더 우측 정렬) */
+    .calendarh-legend { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 2px 4px; font-size: 11px; color: #555; text-align: right; }
+    .calendarh-legend .lg { padding: 1px 6px; border-radius: 4px; white-space: nowrap; }
+    .calendarh-legend b { color: #333; }
+</style>
+    <?php
+}
+
 /**
  * 일자 클릭 시 표시되는 상세 팝업(HTML + CSS + JS)을 출력한다.
  * calendar.php / calendarH.php 가 같은 팝업을 사용한다.
@@ -391,6 +501,7 @@ function closeCalendarModal() {
 // 팝업을 닫고 다른 화면으로 이동
 function calendarOpen(url, title) {
     closeCalendarModal();
+    if (typeof closeWideCalendar === 'function') closeWideCalendar(true);   // 가로 달력 팝업(menu.php)이 열려 있으면 함께 닫음
     loadPage(url, title);
 }
 
